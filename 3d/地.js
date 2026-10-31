@@ -113,7 +113,7 @@ function canal(g, x0, y0, x1, y1, wid) {
     let t = ((x - x0) * (x1 - x0) + (y - y0) * (y1 - y0)) / (L * L); t = Math.max(0, Math.min(1, t));
     const d = Math.hypot(x - (x0 + t * (x1 - x0)), y - (y0 + t * (y1 - y0))); if (d >= wid) continue;
     const bed = h0 - drop * t + 0.8 * (d / wid) ** 2, i = y * W + x;
-    if (bed < h[i]) h[i] = bed;
+    if (bed < h[i]) h[i] = Math.max(bed, h[i] - 1.5);       // 一锹锹挖的，最多挖下去这么深
   }
   const head = Math.round(y0) * W + Math.round(x0), path = [];
   for (let t = 0; t <= L; t += 0.5) { const c = Math.round(y0 + (y1 - y0) * t / L) * W + Math.round(x0 + (x1 - x0) * t / L); if (c !== head && !path.includes(c)) path.push(c); }

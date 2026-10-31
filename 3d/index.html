@@ -183,7 +183,7 @@ function paint(src) {
     let c = paper.map((p, k) => p + (ink[k] - p) * t);
     if (!fut && FIELD[i] > 0 && Q[i] < 60) c = c.map((v, k) => v + (field[k] - v) * FIELD[i] * (1 - slope));
     if (g.kf[i] < 1) c = c.map((v, k) => v * 0.7 + [0.45, 0.42, 0.38][k] * 0.3);
-    let w = Math.max(RW[i] * 0.8, Ws[i] * 1.1); if (lake > 0.05) w = Math.max(w, 0.55);
+    let w = Math.max(RW[i], Ws[i] * 0.6); if (lake > 0.05) w = Math.max(w, 0.55);
     if (w > 0) { const wc = fut ? ghost : water; c = c.map((v, k) => v + (wc[k] - v) * w); }
     if (riskMask && !fut && riskMask[i]) { const st = ((x + ((i / W) | 0)) % 3 === 0) ? 0.75 : 0.45; c = c.map((v, k) => v + ([0.30, 0.52, 0.72][k] - v) * st); }
     if (fl && fl[i] > h[i]) { const a = Math.min(0.85, 0.4 + (fl[i] - h[i])) * Math.min(1, floodShow / 60); c = c.map((v, k) => v + (flood[k] - v) * a); y = Math.max(y, h[i] + (fl[i] - h[i]) * Math.min(1, floodShow / 60)); }
@@ -301,8 +301,8 @@ function act(a) {
   let hq = 0;
   if (a.t === 'canal') {
     // 渠头落在附近最大的水上
-    let hi = -1; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = a.x0 + dx, y = a.y0 + dy; if (x < 0 || y < 0 || x >= g.W - 1 || y >= g.H) continue; const q = g.Q[y * g.W + x]; if (q > hq) { hq = q; hi = y * g.W + x; } }
-    if (hq > 30) { a.x0 = hi % g.W; a.y0 = (hi / g.W) | 0; }
+    let hi = -1; for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) { const x = a.x0 + dx, y = a.y0 + dy; if (x < 0 || y < 0 || x >= g.W - 1 || y >= g.H) continue; const q = g.Q[y * g.W + x]; if (q > hq) { hq = q; hi = y * g.W + x; } }
+    if (hq >= T.p.QV) { a.x0 = hi % g.W; a.y0 = (hi / g.W) | 0; } else { warnFlash('那里没有河。渠要从河里起头：在蓝色的河上按下去，再拖。'); return; }
     Di.canal(g, a.x0, a.y0, a.x1, a.y1, 1.6); snd.dig();
   } else if (Math.hypot(a.x1 - a.x0, a.y1 - a.y0) < 2) {
     // 点一下：点在村子上（或旁边）就给它围一圈堤；点在别处就是一个土包
@@ -321,7 +321,7 @@ function act(a) {
     if (q1 >= T.p.QV) { v.hasWater = true; v.dry = 0; }
   }
   riskUpdate();
-  let txt = a.t === 'canal' ? (hq > 30 ? '你从河里挖了一条渠。' : '你挖了一条沟，可那里没有河，只接得到一点雨水。') : a.ring ? `你在${a.ring}外面围了一圈堤。` : '你垒了一道堤。';
+  let txt = a.t === 'canal' ? '你从河里挖了一条渠。' : a.ring ? `你在${a.ring}外面围了一圈堤。` : '你垒了一道堤。';
   if (a.ring && riskMask) { const v = T.vs.find(v => v.name === a.ring); txt += riskMask[v.y * g.W + v.x] ? '可大水还是漫得进去。' : '大水来了也漫不进去了。'; }
   if (got.length) txt += `水到了${got.join('、')}门口。`;
   if (more.length) txt += `${more.join('、')}门口的水更足了。`;
