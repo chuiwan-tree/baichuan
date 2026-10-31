@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>百川</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #ece6d6; overflow: hidden; font-family: "Songti SC", "STSong", "Noto Serif SC", serif; color: #3a352c; user-select: none; }
+  canvas { display: block; }
+  #top { position: absolute; left: 20px; top: 14px; pointer-events: none; }
+  #top b { font-size: 24px; letter-spacing: 8px; }
+  #lv { font-size: 15px; margin-top: 2px; }
+  #hint { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 16px; background: rgba(250,246,236,.85); padding: 8px 18px; border-radius: 4px; pointer-events: none; transition: opacity .6s; max-width: 70vw; text-align: center; line-height: 1.6; }
+  #year { position: absolute; right: 24px; top: 14px; text-align: right; font-size: 15px; pointer-events: none; }
+  #year .n { font-size: 26px; letter-spacing: 2px; }
+  #bar { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; }
+  .b { border: 1px solid #6b6253; background: rgba(250,246,236,.9); padding: 7px 14px; font-size: 15px; cursor: pointer; border-radius: 3px; font-family: inherit; color: #3a352c; }
+  .b.on { background: #3a352c; color: #f4efe2; }
+  .b:disabled { opacity: .4; cursor: default; }
+  .b small { opacity: .6; margin-left: 4px; }
+  #hands { font-size: 15px; margin: 0 6px; }
+  #end, #title { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(236,230,214,.55); }
+  #end .box, #title .box { background: rgba(250,246,236,.95); padding: 26px 40px; text-align: center; border: 1px solid #b8ad98; line-height: 1.8; }
+  #end h2, #title h1 { margin: 0 0 6px; letter-spacing: 10px; font-weight: normal; }
+  #title h1 { font-size: 46px; letter-spacing: 22px; }
+  .vil { position: absolute; font-size: 13px; pointer-events: none; transform: translate(-50%, -150%); white-space: nowrap; text-shadow: 0 0 3px #f4efe2, 0 0 3px #f4efe2; }
+  #look { position: absolute; left: 50%; top: 60px; transform: translateX(-50%); font-size: 18px; letter-spacing: 4px; display: none; pointer-events: none; color: #7a4a2a; }
+</style>
+<script type="importmap">{ "imports": { "three": "./three.module.min.js", "three/addons/": "./addons/" } }</script>
+<script src="地.js"></script>
+</head>
+<body>
+<div id="top"><b>百川</b><div id="lv"></div></div>
+<div id="hint"></div>
+<div id="look">三千年后 ……</div>
+<div id="year"><span class="n" id="yn">第 0 年</span><br><span id="ys"></span></div>
+<div id="bar">
+  <button class="b on" id="t-dig">挖沟<small>1</small></button>
+  <button class="b" id="t-rock">放石<small>2</small></button>
+  <span id="hands"></span>
+  <button class="b" id="b-undo">悔<small>Z</small></button>
+  <button class="b" id="b-look">往前看<small>按住 F</small></button>
+  <button class="b" id="b-go">让雨落下<small>空格</small></button>
+  <button class="b" id="b-again">重来<small>R</small></button>
+</div>
+<div id="title"><div class="box">
+  <h1>百川</h1>
+  <div>一块刚隆起的新地，三千年的雨。<br>你只有几笔：挖一道沟，或者放一块石头。<br>剩下的，交给水。</div>
+  <br><button class="b" id="b-start">开始</button>
+</div></div>
+<div id="end"><div class="box">
+  <h2 id="e-h"></h2><div id="e-t"></div><br>
+  <button class="b" id="e-again">再来一次</button>
+  <button class="b" id="e-next">下一块地</button>
+</div></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---------------- 规矩 ----------------
+const DT = 4, END = 3000, STEPS = END / DT;          // 每一步是 4 年
+const OPT = { K: 0.004 * DT, D: 0.004 * DT, UP: 0.003 * DT };
+const QV = 100;                                        // 村子边上的水够这么多，就算有河
+const DIG = { dep: 3, wid: 2.2 }, ROCK = { r: 3.2, up: 2.5 };
+
+// 关：种子、村子、几笔、开头那句话
+const LEVELS = [
+  { seed: 7, hands: 1, tool: 'rock', vil: [[60, 30]], name: '一块石头',
+    hint: '这个村子缺水，大河就在它东边流过去。点「放石」，在河里放一块石头，把河逼过来。<br>放好以后按住 F，能看到三千年后的样子。' },
+  { seed: 11, hands: 1, tool: 'dig', vil: [[83, 68]], name: '一道沟',
+    hint: '这回石头不管用。按住左键，从河边往村子拖一笔，就是一道沟。' },
+  { seed: 7, hands: 2, vil: [[60, 30], [44, 50]], name: '一条河，两个村子',
+    hint: '两个村子都想要同一条河。' },
+  { seed: 4242, hands: 2, vil: [[44, 48], [64, 60]], name: '眼下有水',
+    hint: '这两个村子现在都守着河。按住 F，看看三千年后。' },
+  { seed: 4242, hands: 3, vil: [[77, 65], [107, 53], [80, 8]], name: '三个村子',
+    hint: '三个村子，三笔。' },
+];
+let li = +(location.hash.slice(1)) || 0;
+let L, g, acts = [], left = 0, phase = 'title', tool = 'dig', look = null, lookWant = false, ver = 0;
+
+// ---------------- 画 ----------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio)); renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xece6d6);
+scene.fog = new THREE.Fog(0xece6d6, 170, 420);
+const cam = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.5, 1000);
+cam.position.set(-6, 105, 112);
+const ctl = new OrbitControls(cam, renderer.domElement);
+ctl.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+ctl.maxPolarAngle = Math.PI * 0.46; ctl.minDistance = 40; ctl.maxDistance = 260;
+ctl.target.set(0, 0, 4); ctl.update();
+scene.add(new THREE.HemisphereLight(0xfffaf0, 0xb0a890, 1.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(-60, 120, -40); scene.add(sun);
+const ZS = 1.7;
+let RW;
+
+let geo, mesh, sea, vilObjs = [], vilTags = [], rockObjs = [];
+const rockMat = new THREE.MeshLambertMaterial({ color: 0x6d675e, flatShading: true });
+const paper = [0.925, 0.902, 0.84], ink = [0.23, 0.21, 0.18], water = [0.32, 0.50, 0.55], ghost = [0.72, 0.36, 0.22];
+
+function build() {
+  RW = new Float32Array(g.N);
+  if (mesh) { scene.remove(mesh); geo.dispose(); }
+  geo = new THREE.PlaneGeometry(g.W - 1, g.H - 1, g.W - 1, g.H - 1);
+  geo.rotateX(-Math.PI / 2);
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.N * 3), 3));
+  mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  scene.add(mesh);
+  if (!sea) {
+    sea = new THREE.Mesh(new THREE.PlaneGeometry(g.W * 3, g.H * 3), new THREE.MeshBasicMaterial({ color: 0xb4c2be, transparent: true, opacity: .6 }));
+    sea.rotation.x = -Math.PI / 2; sea.position.y = -1.2 * ZS; scene.add(sea);
+  }
+  for (const o of vilObjs) scene.remove(o); for (const t of vilTags) t.remove();
+  vilObjs = []; vilTags = [];
+  L.vil.forEach(([x, y], k) => {
+    const grp = new THREE.Group();
+    const wall = new THREE.MeshLambertMaterial({ color: 0xf2ece0 }), roof = new THREE.MeshLambertMaterial({ color: 0x9a4a32 });
+    for (const [dx, dz, s] of [[0, 0, 1], [1.3, 0.8, .8], [-1.1, 0.9, .7]]) {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(1.1 * s, .8 * s, .9 * s), wall); b.position.set(dx, .4 * s, dz);
+      const r = new THREE.Mesh(new THREE.ConeGeometry(.95 * s, .7 * s, 4), roof); r.position.set(dx, .8 * s + .33 * s, dz); r.rotation.y = Math.PI / 4;
+      grp.add(b, r);
+    }
+    grp.scale.setScalar(1.7); scene.add(grp); vilObjs.push(grp);
+    const tag = document.createElement('div'); tag.className = 'vil'; document.body.appendChild(tag); vilTags.push(tag);
+  });
+}
+
+function wet(Q, x, y) {                                 // 村子边上（两格以内）最大的水
+  let q = 0; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+    const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= g.W || yy >= g.H) continue; q = Math.max(q, Q[yy * g.W + xx]);
+  } return q;
+}
+
+const BA = new Float32Array(128 * 80), BB = new Float32Array(128 * 80);
+function blur(a, f) {                                   // 3x3 抹匀，只为了画；f 给了就先取 max(a, f)（湖面）
+  const W = g.W, H = g.H, out = a === RW ? BB : BA;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let s = 0, c = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+      const j = yy * W + xx, v = f ? Math.max(a[j], f[j]) : a[j], k = (dx || dy) ? 1 : 2; s += v * k; c += k;
+    }
+    out[y * W + x] = s / c;
+  }
+  return out;
+}
+function rocks(src) {
+  for (const o of rockObjs) scene.remove(o); rockObjs = [];
+  for (const a of acts) if (a.t === 'rock') {
+    const m = new THREE.Mesh(new THREE.DodecahedronGeometry(1.6, 0), rockMat), i = a.y * g.W + a.x;
+    m.position.set(a.x - (g.W - 1) / 2, src.h[i] * ZS + 0.3, a.y - (g.H - 1) / 2); m.scale.set(1.3, .8, 1.1); m.rotation.y = a.x;
+    scene.add(m); rockObjs.push(m);
+  }
+}
+function paint(src) {                                   // src：要画的地（眼下的，或者往前看到的）
+  const { h, Q, fill } = src, W = g.W, N = g.N, pos = geo.attributes.position, col = geo.attributes.color;
+  const fut = src !== g;
+  let mn = Infinity, mx = -Infinity; for (let i = 0; i < N; i++) { mn = Math.min(mn, h[i]); mx = Math.max(mx, h[i]); }
+  const dn = src.down || g.down;
+  RW.fill(0);
+  for (let i = 0; i < N; i++) RW[i] = Math.max(RW[i], Math.min(0.9, Math.max(0, (Math.log(Q[i]) - 3.0) / 2.6)));
+  for (let i = 0; i < N; i++) {                         // 斜着流的一步：拐角那一格也染上
+    const d = dn[i], w = Math.min(0.9, Math.max(0, (Math.log(Q[i]) - 3.0) / 2.6)); if (d < 0 || w <= 0) continue;
+    const dx = (d % W) - (i % W), dy = ((d / W) | 0) - ((i / W) | 0);
+    if (dx && dy) { const j = i + dx; RW[j] = Math.max(RW[j], w * 0.85); }
+  }
+  const Hs = blur(h, fill), Ws = blur(RW);
+  for (let i = 0; i < N; i++) {
+    const x = i % W;
+    const lake = fill[i] - h[i];
+    pos.setY(i, Hs[i] * ZS);
+    const hx = h[Math.min(i + 1, N - 1)] - h[Math.max(i - 1, 0)], hy = h[Math.min(i + W, N - 1)] - h[Math.max(i - W, 0)];
+    const slope = Math.min(1, Math.hypot(hx, hy) * 0.9), hi = (h[i] - mn) / (mx - mn + 1e-9);
+    const t = 0.05 + 0.45 * slope + 0.12 * hi;
+    let c = paper.map((p, k) => p + (ink[k] - p) * t);
+    if (g.kf[i] < 1) c = c.map((v, k) => v * 0.75 + [0.42, 0.40, 0.38][k] * 0.25);
+    let w = Math.max(RW[i] * 0.55, Ws[i]);
+    if (lake > 0.05) w = Math.max(w, 0.55);
+    if (w > 0) { const wc = fut ? ghost : water; c = c.map((v, k) => v + (wc[k] - v) * w); }
+    if (x === W - 1) c = [0.70, 0.76, 0.74];
+    col.setXYZ(i, c[0], c[1], c[2]);
+  }
+  pos.needsUpdate = true; col.needsUpdate = true; geo.computeVertexNormals();
+  // 村子：站在地上；有水亮，没水灰
+  let ok = 0;
+  L.vil.forEach(([x, y], k) => {
+    const i = y * W + x, o = vilObjs[k];
+    o.position.set(x - (W - 1) / 2, Math.max(h[i], fill[i]) * ZS + 0.25, y - (g.H - 1) / 2);
+    const q = wet(Q, x, y), has = q >= QV; if (has) ok++;
+    o.children.forEach((m, j) => { if (j % 2 === 0) m.material.color.set(has ? 0xf6eedc : 0xb9b2a4); });
+    vilTags[k].textContent = has ? '有水' : '缺水';
+    vilTags[k].style.color = has ? (fut ? '#9a4a20' : '#2f5f66') : '#8a7f70';
+  });
+  rocks(src);
+  return ok;
+}
+
+function tags() {
+  L.vil.forEach((v, k) => {
+    const p = vilObjs[k].position.clone(); p.y += 2.2; p.project(cam);
+    const t = vilTags[k]; t.style.left = (p.x + 1) / 2 * innerWidth + 'px'; t.style.top = (1 - p.y) / 2 * innerHeight + 'px';
+  });
+}
+
+// ---------------- 声音（从 2D 版搬来的：河声、雨声、咚、嚓） ----------------
+const snd = {
+  ctx: null, on: true,
+  init() {
+    if (this.ctx) return;
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    const c = this.ctx = new C(); this.master = c.createGain(); this.master.gain.value = 0.8; this.master.connect(c.destination);
+    const len = c.sampleRate * 2, buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    let b = 0; for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.white = buf;
+    const brown = c.createBuffer(1, len, c.sampleRate), e = brown.getChannelData(0);
+    for (let i = 0; i < len; i++) { b = (b + 0.02 * (Math.random() * 2 - 1)) / 1.02; e[i] = b * 3.5; }
+    this.brown = brown;
+    const loop = (buffer, type, freq, q) => { const s = c.createBufferSource(); s.buffer = buffer; s.loop = true; const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq; if (q) f.Q.value = q; const gn = c.createGain(); gn.gain.value = 0; s.connect(f); f.connect(gn); gn.connect(this.master); s.start(); return gn; };
+    this.riverG = loop(this.brown, 'lowpass', 500);      // 河：低低的流水
+    this.rainG = loop(this.white, 'bandpass', 2500, 0.6); // 雨：沙沙
+    this.rumbleG = loop(this.brown, 'lowpass', 90);      // 大洪水：闷雷一样的轰
+  },
+  river(q) { if (!this.ctx) return; this.riverG.gain.setTargetAtTime(Math.min(0.45, 0.03 + Math.sqrt(q) / 260), this.ctx.currentTime, 0.4); },
+  rain(on) { if (!this.ctx) return; this.rainG.gain.setTargetAtTime(on ? 0.22 : 0, this.ctx.currentTime, 0.8); },
+  storm(rain, ms) {
+    if (!this.ctx) return; const t = this.ctx.currentTime, d = ms / 1000;
+    const peak = Math.min(0.6, 0.15 + rain * 0.18);
+    this.rainG.gain.cancelScheduledValues(t); this.rainG.gain.setValueAtTime(0.001, t);
+    this.rainG.gain.linearRampToValueAtTime(peak, t + d * 0.3); this.rainG.gain.linearRampToValueAtTime(peak * 0.8, t + d * 0.7); this.rainG.gain.linearRampToValueAtTime(0, t + d);
+    if (rain >= 3) { this.rumbleG.gain.cancelScheduledValues(t); this.rumbleG.gain.setValueAtTime(0, t); this.rumbleG.gain.linearRampToValueAtTime(0.9, t + d * 0.35); this.rumbleG.gain.linearRampToValueAtTime(0, t + d); }
+  },
+  hit(freq, dur, vol, noise) {
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, gn = c.createGain();
+    gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(0.001, t + dur); gn.connect(this.master);
+    if (noise) { const s = c.createBufferSource(); s.buffer = this.white; const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = freq; s.connect(f); f.connect(gn); s.start(t); s.stop(t + dur); }
+    else { const o = c.createOscillator(); o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq * 0.5, t + dur); o.connect(gn); o.start(t); o.stop(t + dur); }
+  },
+  stone() { this.hit(110, 0.25, 0.7, false); this.hit(900, 0.06, 0.3, true); },   // 石头落地：咚
+  dig() { this.hit(700, 0.18, 0.5, true); },                                      // 一锹土：嚓
+  splash() { this.hit(1400, 0.6, 0.5, true); this.hit(70, 0.5, 0.5, false); },     // 淹：哗
+  toggle() { if (!this.ctx) return; this.on = !this.on; this.master.gain.setTargetAtTime(this.on ? 0.8 : 0, this.ctx.currentTime, 0.05); },
+};
+function seaQ() { let q = 0; for (let y = 0; y < g.H; y++) q += g.Q[y * g.W + g.W - 2]; return q; }
+
+// ---------------- 一局 ----------------
+function start(k) {
+  li = (k + LEVELS.length) % LEVELS.length; location.hash = li; L = LEVELS[li];
+  g = Di.make(L.seed, OPT); Di.step(g, 0);
+  acts = []; left = L.hands; phase = 'plan'; look = null; ver++; if (L.tool) tool = L.tool;
+  build(); paint(g); ui(); snd.rain(false); snd.river(seaQ());
+  hint(L.hint);
+  document.getElementById('end').style.display = 'none';
+  vilTags.forEach(t => t.style.display = '');
+}
+function replay() {                                    // 从头照着做过的手再来一遍（悔棋用）
+  g = Di.make(L.seed, OPT); Di.step(g, 0);
+  for (const a of acts) apply(a, false);
+  Di.step(g, 0); look = null; ver++; paint(g); ui();
+}
+function apply(a, fresh) {
+  if (a.t === 'dig') Di.dig(g, a.x0, a.y0, a.x1, a.y1, DIG.dep, DIG.wid);
+  else Di.rock(g, a.x, a.y, ROCK.r, ROCK.up);
+  if (fresh) { a.t === 'dig' ? snd.dig() : snd.stone(); acts.push(a); left--; Di.step(g, 0); look = null; ver++; paint(g); ui(); }
+}
+
+function ui() {
+  document.getElementById('lv').textContent = `第 ${li + 1} 块地　${L.name}`;
+  document.getElementById('hands').textContent = '还有 ' + '●'.repeat(left) + '○'.repeat(L.hands - left) + ' 笔';
+  document.getElementById('t-dig').classList.toggle('on', tool === 'dig');
+  document.getElementById('t-rock').classList.toggle('on', tool === 'rock');
+  document.getElementById('b-undo').disabled = !(phase === 'plan' && acts.length);
+  const go = document.getElementById('b-go');
+  go.firstChild.textContent = phase === 'plan' ? '让雨落下' : phase === 'run' ? '停一停' : phase === 'pause' ? '接着下' : '让雨落下';
+  go.disabled = phase === 'end';
+  const yr = g.step * DT;
+  document.getElementById('yn').textContent = `第 ${yr} 年`;
+  document.getElementById('ys').textContent = `到第 ${END} 年为止`;
+}
+let hintT;
+function hint(s, ms) { const e = document.getElementById('hint'); e.innerHTML = s; e.style.opacity = s ? 1 : 0; clearTimeout(hintT); if (ms) hintT = setTimeout(() => e.style.opacity = 0, ms); }
+
+function finish() {
+  snd.rain(false);
+  phase = 'end'; ui(); vilTags.forEach(t => t.style.display = 'none');
+  const ok = paint(g), n = L.vil.length, used = L.hands - left;
+  document.getElementById('e-h').textContent = ok === n ? '百川归处' : '三千年后';
+  document.getElementById('e-t').innerHTML = `${n} 个村子里，${ok} 个守着河。<br>用了 ${used} 笔。` + (ok === n ? (left > 0 ? '<br>还省下了一笔。' : '') : '<br>水去了别处。');
+  $('e-next').style.display = ok === n ? '' : 'none';
+  $('e-next').textContent = li + 1 < LEVELS.length ? '下一块地' : '从头再来';
+  setTimeout(() => document.getElementById('end').style.display = 'flex', 900);
+}
+
+// ---------------- 往前看（另一个线程算） ----------------
+const wk = new Worker('看远.js');
+let lookVer = -1, lookBusy = false;
+wk.onmessage = e => {
+  lookBusy = false;
+  if (e.data.id !== ver) { if (lookWant) ask(); return; }
+  look = { h: e.data.h, Q: e.data.Q, fill: e.data.fill, down: e.data.down }; lookVer = ver;
+  if (lookWant) show();
+};
+function ask() {
+  if (lookBusy) return; lookBusy = true;
+  wk.postMessage({ id: ver, seed: L.seed, opt: OPT, h: Float64Array.from(g.h), kf: Float64Array.from(g.kf), step: g.step, end: STEPS });
+}
+function show() {
+  document.getElementById('look').style.display = 'block';
+  if (look && lookVer === ver) { document.getElementById('look').textContent = `第 ${END} 年的样子（照眼下这块地）`; paint(look); }
+  else { document.getElementById('look').textContent = '在算三千年 ……'; ask(); }
+}
+function lookOn() { if (phase === 'end' || lookWant) return; lookWant = true; $('hint').style.visibility = 'hidden'; if (phase === 'run') phase = 'pause'; ui(); show(); }
+function lookOff() { if (!lookWant) return; lookWant = false; $('hint').style.visibility = ''; document.getElementById('look').style.display = 'none'; paint(g); }
+
+// ---------------- 手 ----------------
+const ray = new THREE.Raycaster(), mp = new THREE.Vector2();
+function cell(ev) {
+  mp.set(ev.clientX / innerWidth * 2 - 1, -ev.clientY / innerHeight * 2 + 1);
+  ray.setFromCamera(mp, cam); const hit = ray.intersectObject(mesh)[0]; if (!hit) return null;
+  const x = Math.round(hit.point.x + (g.W - 1) / 2), y = Math.round(hit.point.z + (g.H - 1) / 2);
+  if (x < 0 || y < 0 || x >= g.W - 1 || y >= g.H) return null; return { x, y };
+}
+const lineMat = new THREE.LineBasicMaterial({ color: 0x7a3a1a });
+let drag = null, line = null;
+function canAct() { return (phase === 'plan' || phase === 'pause') && left > 0 && !lookWant; }
+renderer.domElement.addEventListener('pointerdown', ev => {
+  if (ev.button !== 0 || !g) return;
+  if (!canAct()) { if (left <= 0 && phase !== 'end') hint('笔用完了。', 1500); else if (phase === 'run') hint('先停一停（空格），再动手。', 1800); return; }
+  const c = cell(ev); if (!c) return;
+  if (tool === 'rock') { apply({ t: 'rock', x: c.x, y: c.y }, true); hint('', 0); return; }
+  drag = c;
+});
+addEventListener('pointermove', ev => {
+  if (!drag) return; const c = cell(ev); if (!c) return;
+  if (line) { scene.remove(line); line.geometry.dispose(); }
+  const pts = []; for (let k = 0; k <= 20; k++) {
+    const x = drag.x + (c.x - drag.x) * k / 20, y = drag.y + (c.y - drag.y) * k / 20, i = Math.round(y) * g.W + Math.round(x);
+    pts.push(new THREE.Vector3(x - (g.W - 1) / 2, Math.max(g.h[i], g.fill[i]) * ZS + .4, y - (g.H - 1) / 2));
+  }
+  line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat); scene.add(line); drag.to = c;
+});
+addEventListener('pointerup', () => {
+  if (!drag) return;
+  if (line) { scene.remove(line); line.geometry.dispose(); line = null; }
+  const a = drag, c = drag.to; drag = null;
+  if (!c || (c.x === a.x && c.y === a.y)) { hint('按住左键拖一笔，就是一道沟。', 2000); return; }
+  apply({ t: 'dig', x0: a.x, y0: a.y, x1: c.x, y1: c.y }, true); hint('', 0);
+});
+
+function go() {
+  if (phase === 'plan' || phase === 'pause') { lookOff(); phase = 'run'; hint('', 0); snd.rain(true); }
+  else if (phase === 'run') { phase = 'pause'; snd.rain(false); }
+  ui();
+}
+const $ = id => document.getElementById(id);
+$('t-dig').onclick = () => { tool = 'dig'; ui(); };
+$('t-rock').onclick = () => { tool = 'rock'; ui(); };
+$('b-undo').onclick = () => { if (phase === 'plan' && acts.length) { acts.pop(); left++; replay(); } };
+$('b-go').onclick = go;
+$('b-again').onclick = () => start(li);
+$('b-look').onpointerdown = lookOn; $('b-look').onpointerup = lookOff; $('b-look').onpointerleave = lookOff;
+$('b-start').onclick = () => { snd.init(); $('title').style.display = 'none'; start(li); };
+$('e-again').onclick = () => start(li);
+$('e-next').onclick = () => start(li + 1);
+addEventListener('keydown', e => {
+  if (phase === 'title') return;
+  if (e.key === ' ') { e.preventDefault(); go(); }
+  else if (e.key === 'f' || e.key === 'F') lookOn();
+  else if (e.key === '1') { tool = 'dig'; ui(); }
+  else if (e.key === '2') { tool = 'rock'; ui(); }
+  else if (e.key === 'z' || e.key === 'Z') $('b-undo').onclick();
+  else if (e.key === 'r' || e.key === 'R') start(li);
+  else if (e.key === 'm' || e.key === 'M') snd.toggle();
+});
+addEventListener('keyup', e => { if (e.key === 'f' || e.key === 'F') lookOff(); });
+
+// ---------------- 走 ----------------
+let acc = 0;
+function frame() {
+  requestAnimationFrame(frame);
+  if (phase === 'run' && (++acc % 2 === 0)) {
+    Di.step(g, 1); ver++; paint(g); ui(); snd.river(seaQ());
+    if (g.step >= STEPS) finish();
+  }
+  ctl.update(); renderer.render(scene, cam); if (g) tags();
+}
+addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+L = LEVELS[li]; g = Di.make(L.seed, OPT); Di.step(g, 0); build(); paint(g);
+$('title').style.display = 'flex';
+window.__g = () => g; window.__start = start; window.__apply = a => apply(a, true); window.__go = go;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -61,6 +61,13 @@ function route(g) {
 function accumulate(g, rain) {
   const { N, Q, down, order } = g; Q.fill(rain === undefined ? g.p.RAIN : rain);
   for (let k = order.length - 1; k >= 0; k--) { const i = order[k], d = down[i]; if (d >= 0) Q[d] += Q[i]; }
+  // 渠口分水：渠头那一格的水分一份进渠，顺着两边各自往下游加减
+  for (const L of g.links || []) {
+    const amt = Q[L.head] * L.frac; if (amt <= 0) continue;
+    for (let i = L.head, n = 0; i >= 0 && n < 4000; i = down[i], n++) Q[i] -= amt;
+    for (const c of L.path) Q[c] += amt;
+    for (let i = down[L.path[L.path.length - 1]], n = 0; i >= 0 && n < 4000; i = down[i], n++) Q[i] += amt;
+  }
 }
 
 function erode(g) {
@@ -98,6 +105,38 @@ function dig(g, x0, y0, x1, y1, dep, wid) {
     if (d < wid) h[y * W + x] -= dep * (1 - d / wid);
   }
 }
+// 渠：从 (x0,y0) 挖到 (x1,y1)，渠底照起点的地面一路往下斜（人挖渠是照着坡度挖的），所以起点要是在河里，河水就会顺渠走
+function canal(g, x0, y0, x1, y1, wid) {
+  const { W, H, h } = g, L = Math.hypot(x1 - x0, y1 - y0) || 1e-9;
+  const h0 = h[Math.round(y0) * W + Math.round(x0)] - 0.4, drop = 0.25 + 0.06 * L;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W - 1; x++) {
+    let t = ((x - x0) * (x1 - x0) + (y - y0) * (y1 - y0)) / (L * L); t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(x - (x0 + t * (x1 - x0)), y - (y0 + t * (y1 - y0))); if (d >= wid) continue;
+    const bed = h0 - drop * t + 0.8 * (d / wid) ** 2, i = y * W + x;
+    if (bed < h[i]) h[i] = bed;
+  }
+  const head = Math.round(y0) * W + Math.round(x0), path = [];
+  for (let t = 0; t <= L; t += 0.5) { const c = Math.round(y0 + (y1 - y0) * t / L) * W + Math.round(x0 + (x1 - x0) * t / L); if (c !== head && !path.includes(c)) path.push(c); }
+  if (path.length) (g.links = g.links || []).push({ head, path, frac: 0.5 });
+}
+// 堤：沿 (x0,y0)-(x1,y1) 垒一道硬土堤，高 up；短的一点就是一个土包
+function levee(g, x0, y0, x1, y1, up) {
+  const { W, H, h, kf } = g, L = Math.hypot(x1 - x0, y1 - y0) || 1e-9, wid = 1.6;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W - 1; x++) {
+    let t = ((x - x0) * (x1 - x0) + (y - y0) * (y1 - y0)) / (L * L); t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(x - (x0 + t * (x1 - x0)), y - (y0 + t * (y1 - y0))); if (d >= wid) continue;
+    const i = y * W + x; h[i] += up * (1 - (d / wid) ** 2); kf[i] = Math.min(kf[i], 0.08);
+  }
+}
+// 圈堤：围着 (cx,cy) 垒一圈，半径 r
+function ring(g, cx, cy, r, up) {
+  const { W, H, h, kf } = g;
+  for (let y = Math.max(0, Math.floor(cy - r - 2)); y <= Math.min(H - 1, Math.ceil(cy + r + 2)); y++)
+    for (let x = Math.max(0, Math.floor(cx - r - 2)); x <= Math.min(W - 2, Math.ceil(cx + r + 2)); x++) {
+      const d = Math.abs(Math.hypot(x - cx, y - cy) - r); if (d >= 1.2) continue;
+      const i = y * W + x; h[i] += up * (1 - (d / 1.2) ** 2); kf[i] = Math.min(kf[i], 0.08);
+    }
+}
 // 石：在 (cx,cy) 放一块硬石，半径 r，高出地面 up；石头上水几乎刮不动
 function rock(g, cx, cy, r, up, hard) {
   const { W, H, h, kf } = g;
@@ -108,6 +147,6 @@ function rock(g, cx, cy, r, up, hard) {
     }
 }
 
-const API = { P, make, route, accumulate, erode, step, dig, rock };
+const API = { P, make, route, accumulate, erode, step, dig, rock, canal, levee, ring };
 if (typeof module !== 'undefined') module.exports = API; else root.Di = API;
 })(this);
