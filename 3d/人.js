@@ -11,7 +11,7 @@
 const NAMES = ['柳村', '石桥', '桑园', '杏花', '鹿鸣', '白沙', '青石', '枫林', '芦花', '云溪', '竹坞', '槐里', '梅岭', '双井', '南浦', '东皋',
   '黄泥', '桃源', '渔湾', '松冈', '麦田', '荷塘', '北坡', '雁落', '茶山', '花溪', '牛背', '燕子', '清水', '老鸦', '柿树', '小河', '长岭', '蒲口', '杨庄', '李家'];
 
-const P = { EVERY: 5, QV: 100, BIG: 700, DROWN: 2500, SPLIT: 70, SPLIT_K: 0.4, GROW: 0.12, DRY: 0.18, MOVE_AFTER: 3, MINPOP: 4, CAP: 150, RANGE: 16, GAP: 11, RISE: 0.9, DROUGHT: 0.15 };
+const P = { EVERY: 5, QV: 100, BIG: 700, DROWN: 2500, SPLIT: 90, SPLIT_K: 0.4, GROW: 0.12, DRY: 0.18, MOVE_AFTER: 3, MINPOP: 4, CAP: 200, RANGE: 18, GAP: 14, RISE: 0.9, DROUGHT: 0.15 };
 
 function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -70,6 +70,23 @@ function first(T, g) {
   return v;
 }
 function say(T, g, text, v, mine) { T.log.push({ year: g.step * 4, text, v: v ? v.id : -1, mine: !!mine }); }
+// 玩家动过的手（index 那边记进 T.works）：离这个村子 7 格以内、最近的那一笔
+function workNear(T, v) {
+  let best = null, bd = 7;
+  for (const w of T.works || []) {
+    const L = Math.hypot(w.x1 - w.x0, w.y1 - w.y0) || 1e-9;
+    let t = ((v.x - w.x0) * (w.x1 - w.x0) + (v.y - w.y0) * (w.y1 - w.y0)) / (L * L); t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(v.x - (w.x0 + t * (w.x1 - w.x0)), v.y - (w.y0 + t * (w.y1 - w.y0)));
+    if (d < bd) { bd = d; best = w; }
+  }
+  return best;
+}
+// 村子出了大事（断水、搬、淹、又有水）：要是旁边有玩家的一笔，就把这件事连回那一笔
+function sayV(T, g, text, v) {
+  const w = workNear(T, v);
+  if (w) text += `（${w.year} 年你${w.kind === 'canal' ? '挖的渠' : '垒的堤'}就在旁边）`;
+  say(T, g, text, v, !!w);
+}
 
 // 每一步调一次；到了 EVERY 才真的看一遍
 function tick(T, g, cause) {
@@ -94,18 +111,18 @@ function tick(T, g, cause) {
     }
     const had = v.hasWater; v.hasWater = q >= p.QV;
     if (v.hasWater) {
-      if (!had) say(T, g, `${v.name}又有水了。`, v, cause);
+      if (!had) sayV(T, g, `${v.name}又有水了。`, v);
       v.dry = 0; const cap = capOf(g, p, v.x, v.y); v.cap = cap;
       v.pop += (cap - v.pop) * p.GROW * dt * (v.pop < cap ? 1 : 0.6);
     } else {
-      if (had) say(T, g, `${v.name}门口的河干了。`, v, cause);
+      if (had) sayV(T, g, `${v.name}门口的河干了。`, v);
       v.dry++; v.cap = 0; v.pop *= Math.pow(1 - p.DRY, dt);
       if (v.dry >= p.MOVE_AFTER) {                    // 撑不住了：搬
         const to = bestSite(g, p, T.vs, v.x, v.y, p.RANGE * 1.4, T.rand, v);
-        if (to) { say(T, g, `${v.name}等不来水，整村搬到了${dirOf(v, to)}${Math.round(Math.hypot(to.x - v.x, to.y - v.y))}里外的河边。`, v, cause); v.x = to.x; v.y = to.y; v.dry = 0; v.hasWater = true; v.moved = (v.moved || 0) + 1; }
+        if (to) { sayV(T, g, `${v.name}等不来水，整村搬到了${dirOf(v, to)}${Math.round(Math.hypot(to.x - v.x, to.y - v.y))}里外的河边。`, v); v.x = to.x; v.y = to.y; v.dry = 0; v.hasWater = true; v.moved = (v.moved || 0) + 1; }
       }
     }
-    if (v.pop < p.MINPOP) { v.alive = false; v.ruin = true; v.died = g.step * 4; say(T, g, `${v.name}的最后几户也走了，只剩下空房子。`, v, cause); continue; }
+    if (v.pop < p.MINPOP) { v.alive = false; v.ruin = true; v.died = g.step * 4; sayV(T, g, `${v.name}的最后几户也走了，只剩下空房子。`, v); continue; }
     v.peak = Math.max(v.peak, v.pop);
     if (v.pop > p.SPLIT && T.rand() < 0.6) {            // 分一支出去
       const to = bestSite(g, p, T.vs, v.x, v.y, p.RANGE, T.rand);

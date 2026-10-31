@@ -311,6 +311,7 @@ function act(a) {
     snd.stone();
   } else { Di.levee(g, a.x0, a.y0, a.x1, a.y1, 2.2); snd.stone(); }
   hands--; acts.push({ ...a, year: g.step * DT });
+  (T.works = T.works || []).push({ kind: a.t, x0: a.x0, y0: a.y0, x1: a.x1, y1: a.y1, year: g.step * DT });
   Di.step(g, 0); ver++; look = null;
   const got = [], lost = [], more = [];
   for (const v of T.vs) if (v.alive && before.has(v.id)) {
