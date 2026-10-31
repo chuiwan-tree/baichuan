@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>百川 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #ece6d6; overflow: hidden; font-family: "Songti SC", "STSong", serif; color: #3a352c; }
+  #info { position: absolute; left: 18px; top: 14px; font-size: 15px; line-height: 1.7; pointer-events: none; }
+  #info b { font-size: 22px; letter-spacing: 6px; }
+  #keys { position: absolute; left: 18px; bottom: 14px; font-size: 13px; opacity: .7; }
+</style>
+<script type="importmap">{ "imports": { "three": "./three.module.min.js", "three/addons/": "./addons/" } }</script>
+<script src="地.js"></script>
+</head>
+<body>
+<div id="info"><b>百川</b><br><span id="stat"></span></div>
+<div id="keys">拖动转视角 · 滚轮远近 · 空格 停/走 · N 换一块地 · 地的种子写在网址 # 后面</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+let seed = +location.hash.slice(1) || Math.floor(Math.random() * 100000);
+let g, run = true;
+const ZS = 1.7;                                  // 高度放大多少
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xece6d6);
+scene.fog = new THREE.Fog(0xece6d6, 180, 420);
+const cam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.5, 1000);
+cam.position.set(-10, 120, 125);
+const ctl = new OrbitControls(cam, renderer.domElement); ctl.target.set(0, 0, 0); ctl.update();
+scene.add(new THREE.HemisphereLight(0xfffaf0, 0xb0a890, 1.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(-60, 120, -40); scene.add(sun);
+
+let geo, mesh, water;
+function build() {
+  location.hash = seed;
+  g = Di.make(seed); Di.step(g, 0);
+  if (mesh) { scene.remove(mesh); scene.remove(water); geo.dispose(); }
+  geo = new THREE.PlaneGeometry(g.W - 1, g.H - 1, g.W - 1, g.H - 1);
+  geo.rotateX(-Math.PI / 2);
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.N * 3), 3));
+  mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  scene.add(mesh);
+  // 海：一张平的、淡的水面
+  water = new THREE.Mesh(new THREE.PlaneGeometry(g.W * 3, g.H * 3), new THREE.MeshBasicMaterial({ color: 0xb9c4c0, transparent: true, opacity: .55 }));
+  water.rotation.x = -Math.PI / 2; water.position.y = -1.2 * ZS; scene.add(water);
+  paint();
+}
+
+// 墨色：纸底，越陡越深；有水的地方是淡淡的石青，水越多越深
+const paper = [0.925, 0.902, 0.84], ink = [0.23, 0.21, 0.18], river = [0.97, 0.97, 0.95]   // 河是留白，像山水画里不着墨的水;
+function paint() {
+  const pos = geo.attributes.position, col = geo.attributes.color, { W, H, h, Q, fill } = g;
+  let mn = Infinity, mx = -Infinity; for (let i = 0; i < g.N; i++) { mn = Math.min(mn, h[i]); mx = Math.max(mx, h[i]); }
+  for (let i = 0; i < g.N; i++) {
+    const x = i % W, y = (i / W) | 0;
+    const lake = fill[i] - h[i];                 // 坑里积的水
+    pos.setY(i, Math.max(h[i], fill[i] - 0.0) * ZS * (lake > 0.02 ? 1 : 1));
+    const hx = h[Math.min(i + 1, g.N - 1)] - h[Math.max(i - 1, 0)], hy = h[Math.min(i + W, g.N - 1)] - h[Math.max(i - W, 0)];
+    const slope = Math.min(1, Math.hypot(hx, hy) * 0.9);
+    const hi = (h[i] - mn) / (mx - mn + 1e-9);
+    let t = 0.04 + 0.42 * slope + 0.10 * hi;     // 墨有多浓
+    let c = paper.map((p, k) => p + (ink[k] - p) * t);
+    const w = Math.min(0.95, Math.max(0, (Math.log(Q[i]) - 2.6) / 2.6)) || (lake > 0.02 ? 0.6 : 0);
+    if (w > 0) c = c.map((v, k) => v + (river[k] - v) * w);
+    if (x === W - 1) c = [0.72, 0.77, 0.75];
+    col.setXYZ(i, c[0], c[1], c[2]);
+  }
+  pos.needsUpdate = true; col.needsUpdate = true; geo.computeVertexNormals();
+  let maxQ = 0; for (let y = 0; y < H; y++) maxQ = Math.max(maxQ, Q[y * W + W - 2]);
+  document.getElementById('stat').textContent = `第 ${g.step} 年　地的种子 ${seed}${run ? '' : '　（停着）'}`;
+}
+
+let acc = 0;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (run && g && g.step < 3000 && (++acc & 1)) { Di.step(g, 1); paint(); }
+  ctl.update(); renderer.render(scene, cam);
+}
+addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); run = !run; paint(); }
+  if (e.key === 'n' || e.key === 'N') { seed = Math.floor(Math.random() * 100000); build(); }
+});
+window.__g = () => g;
+build(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
