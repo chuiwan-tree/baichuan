@@ -33,7 +33,8 @@ function make(seed, opt) {
     h[i] = (W - 1 - x) * p.SLOPE + p.BUMP * (n1[i] + 0.45 * n2[i] + 0.15 * n3[i]);
     if (x === W - 1) h[i] = -2;                 // 海
   }
-  return { p, W, H, N, h, Q: new Float64Array(N), down: new Int32Array(N), step: 0 };
+  const kf = new Float64Array(N).fill(1);           // 每格有多好刮：1 是土，石头小得多
+  return { p, W, H, N, h, kf, Q: new Float64Array(N), down: new Int32Array(N), step: 0 };
 }
 
 const NB = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
@@ -68,7 +69,7 @@ function erode(g) {
   for (let k = 0; k < order.length; k++) {
     const i = order[k], d = down[i]; if (d < 0) continue;
     const dx = (i % W) - (d % W), dy = ((i / W) | 0) - ((d / W) | 0), dist = Math.hypot(dx, dy);
-    const f = p.K * Math.pow(Q[i], p.M) / dist;
+    const f = p.K * g.kf[i] * Math.pow(Q[i], p.M) / dist;
     const target = (h[i] + f * h[d]) / (1 + f);
     if (target < h[i]) h[i] = Math.max(target, h[d] + 1e-5); // 刮了也不会比下游低
   }
@@ -85,8 +86,28 @@ function erode(g) {
   h.set(nh);
 }
 
-function step(g, n) { for (let s = 0; s < (n || 1); s++) { route(g); accumulate(g); erode(g); g.step++; } route(g); accumulate(g); }
+function step(g, n) { const k = n === undefined ? 1 : n; for (let s = 0; s < k; s++) { route(g); accumulate(g); erode(g); g.step++; } route(g); accumulate(g); }
 
-const API = { P, make, route, accumulate, erode, step };
+// 玩的人的手 ------------------------------------------------------
+// 挖：从 (x0,y0) 到 (x1,y1) 挖一道沟，深 dep，宽 wid（中间深两边浅）
+function dig(g, x0, y0, x1, y1, dep, wid) {
+  const { W, H, h } = g, L = Math.hypot(x1 - x0, y1 - y0) || 1e-9;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W - 1; x++) {
+    let t = ((x - x0) * (x1 - x0) + (y - y0) * (y1 - y0)) / (L * L); t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(x - (x0 + t * (x1 - x0)), y - (y0 + t * (y1 - y0)));
+    if (d < wid) h[y * W + x] -= dep * (1 - d / wid);
+  }
+}
+// 石：在 (cx,cy) 放一块硬石，半径 r，高出地面 up；石头上水几乎刮不动
+function rock(g, cx, cy, r, up, hard) {
+  const { W, H, h, kf } = g;
+  for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(H - 1, Math.ceil(cy + r)); y++)
+    for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(W - 2, Math.ceil(cx + r)); x++) {
+      const d = Math.hypot(x - cx, y - cy); if (d > r) continue;
+      const i = y * W + x; h[i] += up * (1 - (d / r) ** 2); kf[i] = Math.min(kf[i], hard === undefined ? 0.08 : hard);
+    }
+}
+
+const API = { P, make, route, accumulate, erode, step, dig, rock };
 if (typeof module !== 'undefined') module.exports = API; else root.Di = API;
 })(this);
