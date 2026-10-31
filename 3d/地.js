@@ -134,7 +134,8 @@ function ring(g, cx, cy, r, up) {
   for (let y = Math.max(0, Math.floor(cy - r - 2)); y <= Math.min(H - 1, Math.ceil(cy + r + 2)); y++)
     for (let x = Math.max(0, Math.floor(cx - r - 2)); x <= Math.min(W - 2, Math.ceil(cx + r + 2)); x++) {
       const d = Math.abs(Math.hypot(x - cx, y - cy) - r); if (d >= 1.2) continue;
-      const i = y * W + x; h[i] += up * (1 - (d / 1.2) ** 2); kf[i] = Math.min(kf[i], 0.08);
+      const i = y * W + x; if (g.Q[i] >= 50) continue;      // 河过的地方留一道水门
+      h[i] += up * (1 - (d / 1.2) ** 2); kf[i] = Math.min(kf[i], 0.08);
     }
 }
 // 石：在 (cx,cy) 放一块硬石，半径 r，高出地面 up；石头上水几乎刮不动
