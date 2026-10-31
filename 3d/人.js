@@ -83,7 +83,8 @@ function workNear(T, v) {
 }
 // 村子出了大事（断水、搬、淹、又有水）：要是旁边有玩家的一笔，就把这件事连回那一笔
 function sayV(T, g, text, v) {
-  const w = workNear(T, v);
+  if (DRYK < 1) { say(T, g, text, v); return; }                 // 旱的时候断水是天的事，不算到玩家头上
+  let w = workNear(T, v); if (w && g.step * 4 - w.year > 300) w = null;
   if (w) text += `（${w.year} 年你${w.kind === 'canal' ? '挖的渠' : '垒的堤'}就在旁边）`;
   say(T, g, text, v, !!w);
 }
