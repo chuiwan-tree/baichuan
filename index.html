@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>百川</title>
+<style>
+  body { background:#1b1a17; color:#e8e2d4; font:15px/1.55 "PingFang SC", sans-serif; margin:0; display:flex; gap:22px; padding:16px; }
+  #wrap { position:relative; }
+  canvas { border-radius:6px; display:block; }
+  #c { cursor:crosshair; }
+  #side { width:320px; }
+  h1 { font-size:24px; margin:0; letter-spacing:6px; }
+  .sub { color:#9a927f; font-size:13px; margin-bottom:10px; }
+  .goal { background:#2a2822; border-left:3px solid #c9a46a; padding:8px 10px; margin:8px 0 12px; font-size:14px; }
+  button { background:#3b5a6e; color:#fff; border:0; padding:8px 14px; font-size:15px; border-radius:4px; cursor:pointer; margin:4px 4px 4px 0; }
+  button:disabled { background:#444; color:#888; cursor:default; }
+  #rain { background:#2f6f9c; font-size:17px; }
+  .k { color:#9a927f; font-size:13px; }
+  #hint { min-height:44px; color:#e8d6a8; font-size:14px; margin:8px 0; }
+  #log { color:#b8ae98; font-size:13px; margin-top:10px; max-height:200px; overflow:auto; }
+  .hands span { display:inline-block; width:16px; height:16px; border-radius:50%; background:#c9a46a; margin-right:4px; vertical-align:-3px; }
+  .hands span.used { background:#444; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="side">
+  <h1>百川</h1>
+  <div class="sub">秋水时至，百川灌河。</div>
+  <div class="goal">水从左边山上流到右边海里，河是水自己冲出来的。<br>
+  每个村子<b>两格以内要有河</b>，不然会渴；可河要是<b>冲进村子</b>，村子就淹了。<br>
+  你管不了水，只能垒石头、挖坑，拨它一下。</div>
+  <div id="stat"></div>
+  <div id="hint"></div>
+  <div>
+    <button id="rain">下雨 ▶</button>
+    <button id="undo">悔一下</button>
+    <button id="new">换一块地</button>
+  </div>
+  <div class="k" style="margin-top:8px">
+  鼠标停在一格上：虚线白水 = 在这垒一块石头以后，水会改走的新路，变淡的是会被让出来的旧河（按住 Shift 看挖一锹）。<br>
+  左键垒，右键挖，空格下雨，M 关声音。手是整局算的，用完就没了。<br>
+  村子离河太近、地又低，大雨时河水会漫过去把它淹了；所以村子要靠水，又不能贴着水。<br>
+  村子头上的水滴：还能渴几季。有水喝的村子会在附近河边分出新村。褐色小点：村子去挑水踩出来的路，越走越低，雨水会顺着路流。</div>
+  <div id="log"></div>
+</div>
+<script>
+// 百川的规矩（不管画）。node 和网页都用它。
+// 一块从左边山上斜到右边海里的地。每一季：照现在的地算水往哪流（这一刻就是预告），
+// 拿这份水给村子算账（渴、淹），然后水把地冲一季（急处刮土、慢处放土），地变了。
+(function (root) {
+'use strict';
+
+const P = {
+  W: 28, H: 18,
+  SLOPE: 0.45,      // 每往右一格低多少
+  BUMP: 2.6,        // 起伏多大
+  RAIN: 1.0,        // 每格每季的雨
+  SPRING: 45,       // 一个泉眼一季冒多少
+  NSPRING: 2,
+  QR: 28,           // 水量到这么多才算"一条河"（村子能喝）
+  QF: 150,          // 冲过村子的水到这么多就淹了
+  DRINK: 2,         // 离河几格以内能喝到
+  THIRST: 2,        // 连着几季没水就散
+  KC: 0.06,         // 水能带多少土：KC*Q^QM*坡
+  QM: 0.5,          // 水量的指数：越大，大河越会往下切（越冲越深自己站住）
+  KE: 0.5,          // 一次最多刮走缺的那么多的几成
+  KD: 0.5,          // 带不动的土放下几成
+  STONE_HARD: 0.25, // 石头比土难刮这么多倍（刮石头只刮得动这么些）
+  SUB: 3,           // 一季冲几小步
+  ACT: 1.0,         // 垒一块、挖一锹，高低差这么多
+  HANDS: 3,         // 一季几下
+  SEASONS: 12,
+  NVIL: 5,
+  RAINS: [0.6, 1.0, 1.6],  // 小雨、中雨、大雨
+  PATH: 0,          // 村子每季去挑水，走过的路踩低这么多（白蚁大象那条视频：路就是沟）
+  PATHR: 8,         // 村子最远走几格去挑水
+  BIRTH: 0,         // 有水喝的村子每季生出一个新村的机会（新村落在附近河边：人往水边挤）
+  VMAX: 12,         // 最多几个村子
+  STAGE: 0,         // 河水漫出来的深度系数（0 是不漫，只有河正冲过村子才淹）
+  BANK: 0.4,        // 离河每远一格，河岸高出这么多才算挡住（越大越难漫）
+  FLOOD: 0,         // 第几季来一场大洪水（开局就亮出来；0 是没有）
+  FLOODR: 3.5,      // 大洪水的雨有多大（中雨是 1）
+};
+
+function rng(seed) {   // mulberry32
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function valueNoise(W, H, cell, R) {
+  const gw = Math.ceil(W / cell) + 2, gh = Math.ceil(H / cell) + 2;
+  const g = []; for (let i = 0; i < gw * gh; i++) g.push(R() * 2 - 1);
+  const out = new Float64Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const fx = x / cell, fy = y / cell, i = Math.floor(fx), j = Math.floor(fy);
+    let u = fx - i, v = fy - j; u = u * u * (3 - 2 * u); v = v * v * (3 - 2 * v);
+    const a = g[j * gw + i], b = g[j * gw + i + 1], c = g[(j + 1) * gw + i], d = g[(j + 1) * gw + i + 1];
+    out[y * W + x] = (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  }
+  return out;
+}
+
+const NB = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
+
+function make(seed, opt) {
+  const p = Object.assign({}, P, opt || {});
+  const R = rng(seed);
+  const W = p.W, H = p.H, N = W * H;
+  const h = new Float64Array(N), stone = new Float64Array(N);
+  const n1 = valueNoise(W, H, 7, R), n2 = valueNoise(W, H, 3.5, R);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    h[i] = (W - 1 - x) * p.SLOPE + p.BUMP * (0.7 * n1[i] + 0.35 * n2[i]);
+    if (x === W - 1) h[i] = 0;
+  }
+  const springs = [];
+  while (springs.length < p.NSPRING) {
+    const y = 1 + Math.floor(R() * (H - 2));
+    if (springs.every(s => Math.abs(s - y) > 3)) springs.push(y);
+  }
+  const rains = []; for (let s = 0; s < p.SEASONS + 1; s++) rains.push(p.RAINS[Math.floor(R() * 3)]);
+  if (p.FLOOD > 0) rains[p.FLOOD - 1] = p.FLOODR;
+  const g = { p, W, H, N, h, stone, springs: springs.map(y => y * W), rains, season: 0,
+              vil: [], log: [], wear: new Float64Array(N), seed };
+  // 村子：在中间到偏右，彼此隔开，开局不被淹
+  const f0 = flow(g, rains[0]);
+  let tries = 0;
+  while (g.vil.length < p.NVIL && tries++ < 5000) {
+    const x = 7 + Math.floor(R() * (W - 11)), y = 1 + Math.floor(R() * (H - 2)), i = y * W + x;
+    if (f0.Q[i] >= p.QR * 0.8 || f0.lake[i]) continue;
+    if (g.vil.some(v => Math.max(Math.abs(v.x - x), Math.abs(v.y - y)) < 4)) continue;
+    g.vil.push({ x, y, i, thirst: 0, alive: true, why: '' });
+    // 开局的村子不能一场大雨就淹（新村可以，那是它自己挤过去的）
+    const fb = flow(g, p.RAINS[2]);
+    if (judge(g, fb)[g.vil.length - 1].state === 'flood') g.vil.pop();
+  }
+  return g;
+}
+
+// 小根堆
+function Heap() { this.a = []; }
+Heap.prototype.push = function (k, v) {
+  const a = this.a; a.push([k, v]); let i = a.length - 1;
+  while (i > 0) { const j = (i - 1) >> 1; if (a[j][0] <= a[i][0]) break; [a[i], a[j]] = [a[j], a[i]]; i = j; }
+};
+Heap.prototype.pop = function () {
+  const a = this.a, top = a[0], last = a.pop();
+  if (a.length) { a[0] = last; let i = 0;
+    for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+      if (l < a.length && a[l][0] < a[m][0]) m = l; if (r < a.length && a[r][0] < a[m][0]) m = r;
+      if (m === i) break; [a[i], a[m]] = [a[m], a[i]]; i = m; } }
+  return top;
+};
+
+// 照现在的地算一季的水：填平洼地（洼地成湖），每格往最陡的低处流，攒起来
+function flow(g, rain) {
+  const { W, H, N, h, p } = g;
+  const L = new Float64Array(N).fill(Infinity), seen = new Uint8Array(N), heap = new Heap();
+  for (let y = 0; y < H; y++) { const i = y * W + W - 1; L[i] = h[i]; seen[i] = 1; heap.push(L[i], i); }
+  const order = [];
+  while (heap.a.length) {
+    const [, c] = heap.pop(); order.push(c);
+    const cx = c % W, cy = (c / W) | 0;
+    for (const [dx, dy] of NB) {
+      const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const n = y * W + x; if (seen[n]) continue; seen[n] = 1;
+      L[n] = Math.max(h[n], L[c] + 1e-3); heap.push(L[n], n);
+    }
+  }
+  const down = new Int32Array(N).fill(-1), slope = new Float64Array(N);
+  for (let c = 0; c < N; c++) {
+    const cx = c % W, cy = (c / W) | 0; if (cx === W - 1) continue;
+    let best = -1, bs = 0;
+    for (const [dx, dy, d] of NB) {
+      const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const n = y * W + x, s = (L[c] - L[n]) / d; if (s > bs) { bs = s; best = n; }
+    }
+    down[c] = best; slope[c] = bs;
+  }
+  const Q = new Float64Array(N);
+  for (let c = 0; c < N; c++) Q[c] = rain * p.RAIN;
+  for (const s of g.springs) Q[s] += p.SPRING * rain;
+  for (let k = order.length - 1; k >= 0; k--) { const c = order[k]; if (down[c] >= 0) Q[down[c]] += Q[c]; }
+  const lake = new Uint8Array(N);
+  for (let c = 0; c < N; c++) if (L[c] - h[c] > 0.05) lake[c] = 1;
+  return { L, down, slope, Q, lake, order, rain };
+}
+
+// 拿一份水给村子算账（不改什么，交回每个村子会怎样）
+function judge(g, f) {
+  const { W, H, p } = g;
+  return g.vil.map(v => {
+    if (!v.alive) return { state: 'gone' };
+    if (f.Q[v.i] >= p.QF || (f.lake[v.i] && f.L[v.i] - g.h[v.i] > 0.3)) return { state: 'flood' };
+    if (p.STAGE > 0) {   // 漫出来：河水有多深 ~ STAGE*sqrt(水量)；两格内哪条河的水面高过村子，就淹
+      for (let dy = -p.DRINK; dy <= p.DRINK; dy++) for (let dx = -p.DRINK; dx <= p.DRINK; dx++) {
+        const x = v.x + dx, y = v.y + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const n = y * W + x; if (f.Q[n] < p.QR) continue;
+        const d = Math.max(Math.abs(dx), Math.abs(dy));
+        if (f.L[n] + p.SLOPE * dx + p.STAGE * Math.sqrt(f.Q[n]) - p.BANK * d > g.h[v.i]) return { state: "flood" };   // p.SLOPE*dx：扣掉整块地往右的斜，上游的河不算比村子高
+      }
+    }
+    let wet = false;
+    for (let dy = -p.DRINK; dy <= p.DRINK && !wet; dy++) for (let dx = -p.DRINK; dx <= p.DRINK; dx++) {
+      const x = v.x + dx, y = v.y + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const n = y * W + x; if (f.Q[n] >= p.QR) { wet = true; break; }   // 死水坑不算：挖个坑当井太便宜（22:39 自己玩时发现）
+    }
+    if (wet) return { state: 'ok' };
+    return { state: v.thirst + 1 >= p.THIRST ? 'dry' : 'thirsty' };
+  });
+}
+
+// 水冲一小步
+function erode(g, f, frac) {
+  const { N, h, stone, p, W } = g;
+  const sed = new Float64Array(N);
+  for (let k = f.order.length - 1; k >= 0; k--) {
+    const c = f.order[k], d = f.down[c];
+    if (c % W === W - 1 || d < 0) continue;
+    if (f.lake[c]) {   // 湖里：土全放下，最多填到水面
+      const put = Math.min(sed[c], Math.max(0, f.L[c] - h[c]));
+      h[c] += put; sed[d] += sed[c] - put; continue;
+    }
+    const cap = p.KC * Math.pow(f.Q[c], p.QM) * f.slope[c] * frac;
+    if (sed[c] < cap) {
+      let want = (cap - sed[c]) * p.KE;
+      want = Math.min(want, Math.max(0, h[c] - h[d]) * 0.5);   // 不往下刮过下游那格
+      let got = 0;
+      if (stone[c] > 0) { const s = Math.min(stone[c], want * p.STONE_HARD); stone[c] -= s; got += s; want = 0; }
+      got += want;
+      h[c] -= got; sed[c] += got;
+    } else {
+      const put = (sed[c] - cap) * p.KD;
+      h[c] += put; sed[c] -= put;
+    }
+    sed[d] += sed[c];
+  }
+}
+
+// 玩的人的一下：kind = 'raise' | 'dig'
+function act(g, i, kind) {
+  const p = g.p;
+  if (i % g.W === g.W - 1) return false;
+  if (g.vil.some(v => v.alive && v.i === i)) return false;   // 村子底下不能动（不然垫个房基就躲过洪水了）
+  if (kind === 'raise') { g.h[i] += p.ACT; g.stone[i] += p.ACT; }
+  else { const s = Math.min(g.stone[i], p.ACT); g.stone[i] -= s; g.h[i] -= p.ACT; }
+  return true;
+}
+
+// 下雨：照季初的水算账，再冲一季
+function season(g) {
+  const rain = g.rains[g.season];
+  const f = flow(g, rain), res = judge(g, f);
+  res.forEach((r, k) => {
+    const v = g.vil[k]; if (!v.alive) return;
+    if (r.state === 'flood') { v.alive = false; v.why = '淹了（第' + (g.season + 1) + '季）'; }
+    else if (r.state === 'dry') { v.alive = false; v.why = '渴散了（第' + (g.season + 1) + '季）'; }
+    else if (r.state === 'thirsty') v.thirst++;
+    else v.thirst = 0;
+  });
+  for (let s = 0; s < g.p.SUB; s++) erode(g, s === 0 ? f : flow(g, rain), 1 / g.p.SUB);
+  if (g.p.PATH > 0) walk(g, f);
+  if (g.p.BIRTH > 0) born(g, f, res);
+  g.season++;
+  return res;
+}
+
+// 村子去挑水：照这一季的水，找最近的一条河（或湖），一步一步走过去，路上每格踩低一点。
+// 越常走越低，下雨时水就顺着路流，河会被一点点引到村子跟前——喝得越多，离水越近，也离淹越近。
+function walk(g, f) {
+  const { W, H, p } = g;
+  for (const v of g.vil) {
+    if (!v.alive) continue;
+    let best = -1, bd = Infinity;
+    for (let dy = -p.PATHR; dy <= p.PATHR; dy++) for (let dx = -p.PATHR; dx <= p.PATHR; dx++) {
+      const x = v.x + dx, y = v.y + dy; if (x < 0 || y < 0 || x >= W - 1 || y >= H) continue;
+      const n = y * W + x; if (n === v.i) continue;
+      if (f.Q[n] >= p.QR || f.lake[n]) { const d = Math.max(Math.abs(dx), Math.abs(dy)) + 0.01 * (dx * dx + dy * dy); if (d < bd) { bd = d; best = n; } }
+    }
+    if (best < 0) continue;
+    let x = v.x, y = v.y; const tx = best % W, ty = (best / W) | 0;
+    while (x !== tx || y !== ty) {
+      x += Math.sign(tx - x); y += Math.sign(ty - y);
+      const n = y * W + x; if (n === best) break;
+      g.h[n] -= p.PATH; g.wear[n] += 1;
+    }
+  }
+}
+
+// 有水喝的村子会分出新村：在 2~4 格外、两格内有河、自己不在河里、离别的村子至少 3 格的地方。
+// 用种子、季、村子号算一个固定的数，不用随机状态（预演、机器人复制的地都一样）。
+function hash(a, b, c) { let h = (a * 374761393 + b * 668265263 + c * 2147483647) >>> 0; h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function born(g, f, res) {
+  const { W, H, p } = g;
+  const n0 = g.vil.length;
+  for (let k = 0; k < n0; k++) {
+    const v = g.vil[k];
+    if (!v.alive || res[k].state !== 'ok' || g.vil.filter(u => u.alive).length >= p.VMAX) continue;
+    if (hash(g.seed, g.season, k) >= p.BIRTH) continue;
+    const cand = [];
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const dd = Math.max(Math.abs(dx), Math.abs(dy)); if (dd < 2) continue;
+      const x = v.x + dx, y = v.y + dy; if (x < 1 || y < 0 || x >= W - 1 || y >= H) continue;
+      const i = y * W + x; if (f.Q[i] >= p.QR * 0.8 || f.lake[i]) continue;
+      if (g.vil.some(u => u.alive && Math.max(Math.abs(u.x - x), Math.abs(u.y - y)) < 3)) continue;
+      let wet = false;
+      for (let ey = -p.DRINK; ey <= p.DRINK && !wet; ey++) for (let ex = -p.DRINK; ex <= p.DRINK; ex++) {
+        const xx = x + ex, yy = y + ey; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        if (f.Q[yy * W + xx] >= p.QR) { wet = true; break; }
+      }
+      if (wet) cand.push(i);
+    }
+    if (!cand.length) continue;
+    const i = cand[Math.floor(hash(g.seed, g.season + 101, k) * cand.length)];
+    g.vil.push({ x: i % W, y: (i / W) | 0, i, thirst: 0, alive: true, why: '', born: g.season + 1, from: k });
+  }
+}
+
+function clone(g) {
+  return Object.assign({}, g, { h: Float64Array.from(g.h), stone: Float64Array.from(g.stone), wear: Float64Array.from(g.wear),
+    vil: g.vil.map(v => Object.assign({}, v)), log: [] });
+}
+const alive = g => g.vil.filter(v => v.alive).length;
+const over = g => g.season >= g.p.SEASONS || alive(g) === 0;
+
+const API = { P, make, flow, judge, erode, act, season, clone, alive, over, rng };
+if (typeof module !== 'undefined') module.exports = API; else root.百川 = API;
+})(this);
+
+</script>
+<script>
+const B = 百川;
+const snd = {
+  ctx: null, on: true,
+  init() {
+    if (this.ctx) return;
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    const c = this.ctx = new C(); this.master = c.createGain(); this.master.gain.value = 0.8; this.master.connect(c.destination);
+    const len = c.sampleRate * 2, buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    let b = 0; for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.white = buf;
+    const brown = c.createBuffer(1, len, c.sampleRate), e = brown.getChannelData(0);
+    for (let i = 0; i < len; i++) { b = (b + 0.02 * (Math.random() * 2 - 1)) / 1.02; e[i] = b * 3.5; }
+    this.brown = brown;
+    const loop = (buffer, type, freq, q) => { const s = c.createBufferSource(); s.buffer = buffer; s.loop = true; const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq; if (q) f.Q.value = q; const gn = c.createGain(); gn.gain.value = 0; s.connect(f); f.connect(gn); gn.connect(this.master); s.start(); return gn; };
+    this.riverG = loop(this.brown, 'lowpass', 500);      // 河：低低的流水
+    this.rainG = loop(this.white, 'bandpass', 2500, 0.6); // 雨：沙沙
+    this.rumbleG = loop(this.brown, 'lowpass', 90);      // 大洪水：闷雷一样的轰
+    if (typeof cur !== 'undefined' && cur) { let q = 0; for (let y = 0; y < g.H; y++) q += cur.f.Q[y * g.W + g.W - 2]; this.river(q); }
+  },
+  river(q) { if (!this.ctx) return; this.riverG.gain.setTargetAtTime(Math.min(0.5, 0.04 + Math.sqrt(q) / 120), this.ctx.currentTime, 0.4); },
+  storm(rain, ms) {
+    if (!this.ctx) return; const t = this.ctx.currentTime, d = ms / 1000;
+    const peak = Math.min(0.6, 0.15 + rain * 0.18);
+    this.rainG.gain.cancelScheduledValues(t); this.rainG.gain.setValueAtTime(0.001, t);
+    this.rainG.gain.linearRampToValueAtTime(peak, t + d * 0.3); this.rainG.gain.linearRampToValueAtTime(peak * 0.8, t + d * 0.7); this.rainG.gain.linearRampToValueAtTime(0, t + d);
+    if (rain >= 3) { this.rumbleG.gain.cancelScheduledValues(t); this.rumbleG.gain.setValueAtTime(0, t); this.rumbleG.gain.linearRampToValueAtTime(0.9, t + d * 0.35); this.rumbleG.gain.linearRampToValueAtTime(0, t + d); }
+  },
+  hit(freq, dur, vol, noise) {
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, gn = c.createGain();
+    gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(0.001, t + dur); gn.connect(this.master);
+    if (noise) { const s = c.createBufferSource(); s.buffer = this.white; const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = freq; s.connect(f); f.connect(gn); s.start(t); s.stop(t + dur); }
+    else { const o = c.createOscillator(); o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq * 0.5, t + dur); o.connect(gn); o.start(t); o.stop(t + dur); }
+  },
+  stone() { this.hit(110, 0.25, 0.7, false); this.hit(900, 0.06, 0.3, true); },   // 石头落地：咚
+  dig() { this.hit(700, 0.18, 0.5, true); },                                      // 一锹土：嚓
+  splash() { this.hit(1400, 0.6, 0.5, true); this.hit(70, 0.5, 0.5, false); },     // 淹：哗
+  toggle() { if (!this.ctx) return; this.on = !this.on; this.master.gain.setTargetAtTime(this.on ? 0.8 : 0, this.ctx.currentTime, 0.05); },
+};
+const Q = new URLSearchParams(location.search);
+const OPT = Q.get('opt') ? JSON.parse(Q.get('opt')) : { QM: 0.8, KC: 0.04, PATH: 0.2, THIRST: 3, HANDS: 1, BUDGET: 4, QF: 80, BIRTH: 0.15, STAGE: 0.06, BANK: 1.0, FLOOD: 10, FLOODR: 3.5, SEASONS: 10 };   // 大洪水就是最后一季：挺过去几个就是结局
+let seed = +Q.get('seed') || +location.hash.slice(1) || (Date.now() % 100000);
+const CS = 34;
+const cv = document.getElementById('c'), cx = cv.getContext('2d');
+const bg = document.createElement('canvas'), bx = bg.getContext('2d');
+const bgOld = document.createElement('canvas'), bxOld = bgOld.getContext('2d');
+let anim = null;
+let g, hist, handsLeft, budgetLeft, log, cur, hover = null, ghost = null, shift = false, t0 = performance.now();
+const RNAME = { 0.6:'小雨', 1:'中雨', 1.6:'大雨', 3.5:'大洪水' };
+const budgeted = () => OPT.BUDGET !== undefined;
+
+function start() {
+  location.hash = seed;
+  g = B.make(seed, OPT); hist = []; log = [];
+  handsLeft = g.p.HANDS; budgetLeft = OPT.BUDGET;
+  cv.width = g.W * CS; cv.height = g.H * CS; bg.width = cv.width; bg.height = cv.height; bgOld.width = cv.width; bgOld.height = cv.height; anim = null;
+  refresh();
+}
+// 现在这一季的水、村子会怎样
+function refresh() {
+  cur = looking() ? ahead(g) : calc(g);
+  if (snd.ctx) { let q = 0; for (let y = 0; y < g.H; y++) q += cur.f.Q[y * g.W + g.W - 2]; snd.river(q); }
+  if (looking()) { const keep = g; g = cur.g; paintGround(); g = keep; } else paintGround();   // 往前看时画那时候的地
+  ghost = null; computeGhost();
+  side();
+}
+let floodView = false;
+function calc(gg, rain) {
+  const f = B.flow(gg, rain !== undefined ? rain : (gg.rains[gg.season] || 1));
+  return { f, res: B.judge(gg, f), chains: chains(gg, f) };
+}
+const looking = () => floodView && g.p.FLOOD && g.season < g.p.FLOOD;
+// 往前看：照现在的地，中间不再动手，一季一季冲到大洪水那季，那时的水、村子会怎样。
+// 挖下去的沟会不会越冲越深、河会不会自己挪过去，这里看得见。
+function ahead(gg) {
+  const c = B.clone(gg);
+  while (c.season < c.p.FLOOD - 1 && !B.over(c)) B.season(c);
+  const f = B.flow(c, c.p.FLOODR), res = B.judge(c, f);
+  const lost = res.filter(r => r.state === 'flood').length;
+  const keep = res.filter(r => r.state === 'ok' || r.state === 'thirsty').length;
+  return { f, res, chains: chains(c, f), g: c, lost, keep };
+}
+// 把有水的格子串成一条条线（从源头顺着往下），好画成弯的河
+function chains(gg, f) {
+  const thr = gg.p.QR * 0.45, out = [], N = gg.N;
+  const isW = i => f.Q[i] >= thr && !f.lake[i];
+  const up = new Int32Array(N); // 有几个有水的上游
+  for (let i = 0; i < N; i++) if (isW(i) && f.down[i] >= 0) up[f.down[i]]++;
+  for (let i = 0; i < N; i++) {
+    if (!isW(i) || up[i] > 0) continue;
+    // 从一个源头往下走，直到并进已画过的、进海、进湖
+    const pts = [i]; let c = i, guard = 0;
+    while (f.down[c] >= 0 && guard++ < 400) { const d = f.down[c]; pts.push(d); if (up[d] > 1 || f.lake[d] || d % gg.W === gg.W - 1) break; c = d; }
+    out.push(pts);
+  }
+  // 汇流点以下：从每个汇流点再起一条
+  for (let i = 0; i < N; i++) if (isW(i) && up[i] > 1 && !f.lake[i]) {
+    const pts = [i]; let c = i, guard = 0;
+    while (f.down[c] >= 0 && guard++ < 400) { const d = f.down[c]; pts.push(d); if (up[d] > 1 || f.lake[d] || d % gg.W === gg.W - 1) break; c = d; }
+    out.push(pts);
+  }
+  return out;
+}
+// 地：把格子的高低插值成连续的，配颜色、山影、等高线
+function paintGround() {
+  const W = g.W, H = g.H, w = bg.width, h = bg.height;
+  const img = bx.createImageData(w, h), d = img.data;
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < g.N; i++) if (i % W !== W - 1) { mn = Math.min(mn, g.h[i]); mx = Math.max(mx, g.h[i]); }
+  const H_ = (x, y) => { x = Math.max(0, Math.min(W - 2, x)); y = Math.max(0, Math.min(H - 1, y)); return g.h[y * W + x]; };
+  const hv = (px, py) => {   // 双线性
+    const fx = px / CS - 0.5, fy = py / CS - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    return (H_(x0, y0) * (1 - tx) + H_(x0 + 1, y0) * tx) * (1 - ty) + (H_(x0, y0 + 1) * (1 - tx) + H_(x0 + 1, y0 + 1) * tx) * ty;
+  };
+  const step = 2;   // 每 2 像素算一次，省力
+  for (let py = 0; py < h; py += step) for (let px = 0; px < w; px += step) {
+    let r, gg, b;
+    if (px >= (W - 1) * CS) { r = 28; gg = 62; b = 92; }
+    else {
+      const v = hv(px, py), t = (v - mn) / (mx - mn + 1e-9);
+      // 低：草绿 → 中：土黄 → 高：赭石
+      if (t < 0.5) { const k = t / 0.5; r = 78 + 80 * k; gg = 112 + 40 * k; b = 62 + 20 * k; }
+      else { const k = (t - 0.5) / 0.5; r = 158 + 40 * k; gg = 152 - 40 * k; b = 82 - 10 * k; }
+      // 山影：光从左上；扣掉整体往右的斜坡，只留起伏
+      const sx = hv(px - 4, py) - hv(px + 4, py) - g.p.SLOPE * 8 / CS, sy = hv(px, py - 4) - hv(px, py + 4);
+      const s = Math.max(-1, Math.min(1, (sx + sy) * 1.6));
+      const m = 1 + 0.35 * s; r *= m; gg *= m; b *= m;
+      // 等高线：每 0.5 一条（只画起伏，减掉斜坡）
+      const rel = v - (W - 1 - px / CS + 0.5) * g.p.SLOPE;
+      const fr = ((rel * 2) % 1 + 1) % 1;
+      if (fr < 0.06) { r *= 0.78; gg *= 0.78; b *= 0.78; }
+    }
+    for (let yy = 0; yy < step; yy++) for (let xx = 0; xx < step; xx++) {
+      const o = ((py + yy) * w + px + xx) * 4; d[o] = r; d[o + 1] = gg; d[o + 2] = b; d[o + 3] = 255;
+    }
+  }
+  bx.putImageData(img, 0, 0);
+  // 踩出来的路
+  for (let i = 0; i < g.N; i++) if (g.wear[i] > 0) {
+    const x = i % W, y = (i / W) | 0;
+    bx.fillStyle = 'rgba(110,70,40,' + Math.min(0.75, 0.25 + g.wear[i] * 0.1) + ')';
+    for (let k = 0; k < 3; k++) { bx.beginPath(); bx.arc(x * CS + CS * (0.3 + 0.2 * k), y * CS + CS * (0.35 + 0.15 * ((k * 7 + i) % 3)), 2.2, 0, 7); bx.fill(); }
+  }
+  // 石头
+  for (let i = 0; i < g.N; i++) if (g.stone[i] > 0.01) {
+    const x = i % W, y = (i / W) | 0, X = x * CS + CS / 2, Y = y * CS + CS / 2, r = CS * (0.18 + Math.min(0.15, g.stone[i] * 0.2));
+    bx.fillStyle = '#8d8a84'; bx.beginPath(); bx.ellipse(X, Y, r * 1.1, r * 0.85, 0.3, 0, 7); bx.fill();
+    bx.fillStyle = '#b9b5ad'; bx.beginPath(); bx.ellipse(X - r * 0.25, Y - r * 0.25, r * 0.5, r * 0.35, 0.3, 0, 7); bx.fill();
+  }
+  // 挖过的坑（比开局低、又没石头的格子，没法直接知道；用 log 里记的）
+}
+function isRiver(f, i) { return f.Q[i] >= g.p.QR * 0.45 && !f.lake[i]; }
+function cc(i) { return [(i % g.W) * CS + CS / 2, ((i / g.W) | 0) * CS + CS / 2]; }
+function drawWater(state, alpha, ghostMode, now, widen) {
+  widen = widen || 1;
+  const { f, chains } = state;
+  // 湖
+  if (!ghostMode) for (let i = 0; i < g.N; i++) if (f.lake[i]) {
+    const x = i % g.W, y = (i / g.W) | 0;
+    cx.fillStyle = 'rgba(70,140,200,0.7)'; cx.beginPath(); cx.roundRect(x * CS + 1, y * CS + 1, CS - 2, CS - 2, 8); cx.fill();
+  }
+  cx.lineCap = 'round'; cx.lineJoin = 'round';
+  for (const pts of chains) {
+    // 分段画，粗细跟着水量
+    for (let k = 0; k + 1 < pts.length; k++) {
+      const a = pts[k], b = pts[k + 1], q = f.Q[a];
+      if (ghostMode && (q < g.p.QR || isRiver(cur.f, a))) continue;   // 只画新出来的真河
+      const gone = !ghostMode && ghost && q >= g.p.QR && !isRiver(ghost.state.f, a);
+      const w = Math.min(CS * 0.95, (2 + Math.sqrt(q) * 1.0) * widen);
+      const [x1, y1] = cc(a), [x2, y2] = cc(b);
+      const xa = k > 0 ? (cc(pts[k - 1])[0] + x1) / 2 : x1, ya = k > 0 ? (cc(pts[k - 1])[1] + y1) / 2 : y1;
+      const xb = (x1 + x2) / 2, yb = (y1 + y2) / 2;
+      cx.lineWidth = w;
+      if (ghostMode) { cx.strokeStyle = 'rgba(255,255,255,' + alpha + ')'; cx.setLineDash([6, 6]); cx.lineDashOffset = -now / 40; }
+      else {
+        cx.setLineDash([]);
+        cx.strokeStyle = q >= g.p.QF ? 'rgba(150,205,255,' + alpha + ')' : q >= g.p.QR ? 'rgba(80,150,225,' + alpha + ')' : 'rgba(80,150,225,' + alpha * 0.4 + ')';
+        if (gone) { cx.strokeStyle = 'rgba(80,150,225,0.25)'; }
+      }
+      cx.beginPath(); cx.moveTo(xa, ya); cx.quadraticCurveTo(x1, y1, xb, yb);
+      if (k + 2 === pts.length) cx.lineTo(x2, y2);
+      cx.stroke();
+      // 流动的亮点
+      if (!ghostMode && q >= g.p.QR) {
+        cx.strokeStyle = 'rgba(220,240,255,0.35)'; cx.lineWidth = Math.max(1, w * 0.3); cx.setLineDash([3, 14]); cx.lineDashOffset = -now / 30;
+        cx.beginPath(); cx.moveTo(xa, ya); cx.quadraticCurveTo(x1, y1, xb, yb); cx.stroke();
+      }
+    }
+  }
+  cx.setLineDash([]);
+}
+function drawVillages(state, now) {
+  (state.g || g).vil.forEach((v, k) => {
+    const r = state.res[k], [X, Y] = cc(v.i);
+    if (!v.alive) {
+      cx.fillStyle = 'rgba(40,30,25,0.7)'; cx.beginPath(); cx.arc(X, Y, CS * 0.42, 0, 7); cx.fill();
+      cx.strokeStyle = '#9a8f80'; cx.lineWidth = 2;
+      cx.beginPath(); cx.moveTo(X - 7, Y - 7); cx.lineTo(X + 7, Y + 7); cx.moveTo(X + 7, Y - 7); cx.lineTo(X - 7, Y + 7); cx.stroke();
+      return;
+    }
+    const col = r.state === 'ok' ? '#6fdc6f' : r.state === 'thirsty' ? '#f0cc44' : '#ff4a3a';
+    // 两格的范围（能喝到水的地方）
+    cx.strokeStyle = col.replace(')', ',0.25)').replace('#6fdc6f', 'rgba(111,220,111,0.22)').replace('#f0cc44', 'rgba(240,204,68,0.22)').replace('#ff4a3a', 'rgba(255,74,58,0.3)');
+    cx.setLineDash([3, 4]); cx.lineWidth = 1.5;
+    cx.strokeRect((v.x - g.p.DRINK) * CS + 2, (v.y - g.p.DRINK) * CS + 2, (2 * g.p.DRINK + 1) * CS - 4, (2 * g.p.DRINK + 1) * CS - 4);
+    cx.setLineDash([]);
+    const pulse = r.state === 'ok' ? 0 : Math.sin(now / 200) * 2;
+    cx.fillStyle = 'rgba(0,0,0,0.35)'; cx.beginPath(); cx.arc(X, Y, CS * 0.46 + pulse, 0, 7); cx.fill();
+    cx.strokeStyle = col; cx.lineWidth = 3; cx.beginPath(); cx.arc(X, Y, CS * 0.46 + pulse, 0, 7); cx.stroke();
+    // 小房子
+    cx.fillStyle = '#f2e3c4'; cx.fillRect(X - 8, Y - 2, 16, 10);
+    cx.fillStyle = '#a0522d'; cx.beginPath(); cx.moveTo(X - 10, Y - 2); cx.lineTo(X, Y - 11); cx.lineTo(X + 10, Y - 2); cx.fill();
+    // 水滴：还能渴几季
+    const left = g.p.THIRST - v.thirst;
+    for (let j = 0; j < g.p.THIRST; j++) {
+      const dx = X - (g.p.THIRST - 1) * 6 + j * 12, dy = Y - CS * 0.72;
+      cx.fillStyle = j < left ? '#7cc4ff' : 'rgba(255,255,255,0.15)';
+      cx.beginPath(); cx.moveTo(dx, dy - 6); cx.quadraticCurveTo(dx + 5, dy + 1, dx, dy + 4); cx.quadraticCurveTo(dx - 5, dy + 1, dx, dy - 6); cx.fill();
+    }
+    if (r.state === 'flood') { cx.fillStyle = '#ff4a3a'; cx.font = 'bold 12px sans-serif'; cx.textAlign = 'center'; cx.fillText('要淹', X, Y + CS * 0.75); }
+    if (r.state === 'dry') { cx.fillStyle = '#ff4a3a'; cx.font = 'bold 12px sans-serif'; cx.textAlign = 'center'; cx.fillText('要渴散', X, Y + CS * 0.75); }
+  });
+}
+function rnd(i) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+function drawAnim(now) {
+  const a = anim, t = Math.min(1, (now - a.t0) / a.dur), wave = Math.sin(Math.PI * Math.min(1, t * 1.15));
+  // 地：旧的慢慢换成冲过以后的
+  cx.drawImage(bg, 0, 0);
+  const k = Math.max(0, Math.min(1, (t - 0.35) / 0.5));
+  cx.globalAlpha = 1 - k; cx.drawImage(bgOld, 0, 0); cx.globalAlpha = 1;
+  // 天暗下来
+  cx.fillStyle = 'rgba(15,25,45,' + (0.18 + 0.12 * Math.min(1, a.rain / 1.6)) * wave + ')'; cx.fillRect(0, 0, cv.width, cv.height);
+  // 这一季的大水：涨起来又落下去
+  drawWater(a.storm, 0.95 * Math.min(1, wave * 1.4), false, now, 1 + 0.5 * wave);
+  if (t > 0.6) drawWater(cur, (t - 0.6) / 0.4, false, now);
+  // 雨点
+  const n = Math.round(170 * a.rain);
+  cx.strokeStyle = 'rgba(215,230,255,' + 0.85 * wave + ')'; cx.lineWidth = 1.4; cx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const sp = 0.9 + rnd(i) * 0.6, x0 = rnd(i + 99) * (cv.width + 80), y = ((rnd(i + 7) * cv.height + now * 0.9 * sp) % (cv.height + 40)) - 20;
+    const x = x0 - (y * 0.25) % (cv.width + 80);
+    cx.moveTo(x, y); cx.lineTo(x - 5, y + 20);
+  }
+  cx.stroke();
+  // 村子：前半看的是这一季的账，后半是新的
+  const before = t < 0.6;
+  const vils = before ? a.pre.vil : g.vil;
+  vils.forEach((v, idx) => {
+    const [X, Y] = cc(v.i);
+    if (idx >= a.n0 && t < 0.75) return;   // 新村还没冒出来
+    const r = idx < a.n0 ? a.res[idx] : { state: 'ok' };
+    const dead = !before && !v.alive;
+    if (r.state === 'gone' || (dead && !(r.state === 'flood' || r.state === 'dry'))) {
+      cx.fillStyle = 'rgba(40,30,25,0.7)'; cx.beginPath(); cx.arc(X, Y, CS * 0.42, 0, 7); cx.fill(); return;
+    }
+    let sc = 1; if (idx >= a.n0) sc = Math.min(1, (t - 0.75) / 0.15);
+    cx.save(); cx.translate(X, Y); cx.scale(sc, sc);
+    if (dead) cx.globalAlpha = 0.35;
+    cx.fillStyle = '#f2e3c4'; cx.fillRect(-8, -2, 16, 10);
+    cx.fillStyle = '#a0522d'; cx.beginPath(); cx.moveTo(-10, -2); cx.lineTo(0, -11); cx.lineTo(10, -2); cx.fill();
+    cx.restore(); cx.globalAlpha = 1;
+    // 淹：一圈圈水纹；渴散：土色散开
+    if (r.state === 'flood' && t > 0.3) { for (let j = 0; j < 3; j++) { const rr = ((now / 9 + j * 12) % 36); cx.strokeStyle = 'rgba(120,190,255,' + (1 - rr / 36) + ')'; cx.lineWidth = 2; cx.beginPath(); cx.arc(X, Y, rr, 0, 7); cx.stroke(); } }
+    if (r.state === 'dry' && t > 0.3) { cx.fillStyle = 'rgba(190,150,90,' + (1 - t) + ')'; for (let j = 0; j < 8; j++) { const ang = j * 0.8, rr = (t - 0.3) * 50; cx.beginPath(); cx.arc(X + Math.cos(ang) * rr, Y + Math.sin(ang) * rr, 2.5, 0, 7); cx.fill(); } }
+    // 字
+    const word = r.state === 'flood' ? '淹了' : r.state === 'dry' ? '渴散了' : idx >= a.n0 ? '新村' : '';
+    if (word && t > 0.45) { cx.fillStyle = (idx >= a.n0 ? 'rgba(160,255,160,' : 'rgba(255,120,100,') + Math.min(1, (1 - t) * 4) + ')'; cx.font = 'bold 14px sans-serif'; cx.textAlign = 'center'; cx.fillText(word, X, Y - 20 - (t - 0.45) * 30); }
+    if (!a.played && r.state === 'flood' && t > 0.4) snd.splash();
+  });
+  if (t > 0.4) a.played = true;
+  if (t >= 1) { anim = null; }
+}
+function frame(now) {
+  if (!g) return requestAnimationFrame(frame);
+  if (anim) { drawAnim(now); requestAnimationFrame(frame); return; }
+  cx.drawImage(bg, 0, 0);
+  drawWater(cur, 0.95, false, now);
+  if (ghost) drawWater(ghost.state, 0.75, true, now);
+  // 泉眼
+  for (const s of g.springs) { const [X, Y] = cc(s); const r = 7 + Math.sin(now / 300) * 1.5;
+    cx.fillStyle = '#d8f0ff'; cx.beginPath(); cx.arc(X, Y, r, 0, 7); cx.fill(); cx.strokeStyle = '#7cc4ff'; cx.lineWidth = 2; cx.beginPath(); cx.arc(X, Y, r + 4, 0, 7); cx.stroke(); }
+  drawVillages(ghost ? ghost.state : cur, now);
+  if (hover !== null) { const x = hover % g.W, y = (hover / g.W) | 0;
+    cx.strokeStyle = shift ? '#ffb070' : '#ffffff'; cx.lineWidth = 2; cx.strokeRect(x * CS + 1, y * CS + 1, CS - 2, CS - 2); }
+  requestAnimationFrame(frame);
+}
+function computeGhost() {
+  const hint = document.getElementById('hint');
+  if (hover === null || !canAct()) { ghost = null; hint.textContent = ''; document.title = '百川'; return; }
+  if (g.vil.some(v => v.alive && v.i === hover)) { ghost = null; hint.textContent = '村子底下动不了'; document.title = '百川 村子底下动不了'; return; }
+  const c = B.clone(g); B.act(c, hover, shift ? 'dig' : 'raise');
+  const st = looking() ? ahead(c) : calc(c); ghost = { state: st };
+  if (looking()) {
+    const w = (shift ? '在这挖一锹' : '在这垒一块') + `，往后不再动手，到第 ${g.p.FLOOD} 季大洪水：淹 ${cur.lost} 个 → ${st.lost} 个，挺过去 ${cur.keep} 个 → ${st.keep} 个`;
+    hint.textContent = w; document.title = '百川 (' + (hover % g.W) + ',' + ((hover / g.W) | 0) + ')' + (shift ? '挖' : '垒') + '：洪水淹' + cur.lost + '→' + st.lost + ' 挺过' + cur.keep + '→' + st.keep;
+    return;
+  }
+  const word = { ok: '有水', thirsty: '渴', flood: '要淹', dry: '要渴散', gone: '' };
+  const ch = [];
+  cur.res.forEach((r, k) => { if (r.state !== st.res[k].state) ch.push(`村${k + 1}：${word[r.state]} → ${word[st.res[k].state]}`); });
+  hint.innerHTML = (shift ? '在这挖一锹' : '在这垒一块') + '：' + (ch.length ? ch.join('，') : '村子们这一季没变化（河可能换了路，看虚线）');
+  document.title = '百川 (' + (hover % g.W) + ',' + ((hover / g.W) | 0) + ')' + (shift ? '挖' : '垒') + '：' + (ch.length ? ch.join('，') : '没变化');
+}
+function side() {
+  const over = B.over(g);
+  let hands = '';
+  if (budgeted()) { hands = '手：'; for (let i = 0; i < OPT.BUDGET; i++) hands += `<span class="${i < OPT.BUDGET - budgetLeft ? 'used' : ''}"></span>`; }
+  else hands = `这季还剩 <b>${handsLeft}</b> 下`;
+  document.getElementById('stat').innerHTML = over
+    ? `<b>完了。</b>剩 ${B.alive(g)} 个村子（开局 ${g.p.NVIL} 个，一共生过 ${g.vil.length} 个）。<br>地的种子 ${seed}`
+    : (g.p.FLOOD && g.season < g.p.FLOOD ? `<div style="color:#ff9a6a;margin-bottom:4px">⚠ 第 ${g.p.FLOOD} 季大洪水（${g.season + 1 === g.p.FLOOD ? '<b>就是这一季</b>' : '还有 ' + (g.p.FLOOD - g.season - 1) + ' 季'}）　按住 F 往前看：照现在的地一路冲到那季，会淹哪</div>` : '') + (looking() ? `<div style="color:#ff9a6a"><b>正在往前看：第 ${g.p.FLOOD} 季大洪水</b>（这中间不再动手，地照雨一季季冲过去）。到时候淹 ${cur.lost} 个，挺过去 ${cur.keep} 个。停在格上看这一下能改多少</div>` : '') + `第 <b>${g.season + 1}</b> / ${g.p.SEASONS} 季　这季：<b>${RNAME[g.rains[g.season]]}</b>　下季：${RNAME[g.rains[g.season + 1]] || '—'}<br><span class="hands">${hands}</span>　还剩 ${B.alive(g)} 个村子`;
+  document.getElementById('rain').disabled = over;
+  document.getElementById('undo').disabled = !hist.length;
+  document.getElementById('log').innerHTML = log.slice().reverse().join('<br>');
+}
+function canAct() { return !B.over(g) && (budgeted() ? budgetLeft > 0 : handsLeft > 0); }
+function cellAt(e) {
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / CS), y = Math.floor((e.clientY - r.top) / CS);
+  if (x < 0 || y < 0 || x >= g.W - 1 || y >= g.H) return null;
+  return y * g.W + x;
+}
+function doAct(e, kind) {
+  e.preventDefault();
+  const i = cellAt(e); if (i === null || !canAct()) return;
+  if (g.vil.some(v => v.alive && v.i === i)) return;
+  hist.push({ g: B.clone(g), handsLeft, budgetLeft });
+  B.act(g, i, kind);
+  snd.init(); kind === 'raise' ? snd.stone() : snd.dig();
+  if (budgeted()) budgetLeft--; else handsLeft--;
+  log.push(`　第 ${g.season + 1} 季 ${kind === 'raise' ? '垒' : '挖'} (${i % g.W},${(i / g.W) | 0})`);
+  refresh();
+}
+cv.addEventListener('mousemove', e => { const i = cellAt(e); shift = e.shiftKey; if (i !== hover) { hover = i; computeGhost(); } });
+cv.addEventListener('mouseleave', () => { hover = null; computeGhost(); });
+addEventListener('keydown', e => { if (e.key === 'Shift' && !shift) { shift = true; computeGhost(); } });
+addEventListener('keyup', e => { if (e.key === 'Shift') { shift = false; computeGhost(); } if (e.key === 'f' || e.key === 'F') { floodView = false; refresh(); } });
+addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); document.getElementById('rain').click(); } });
+addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !floodView && g.p.FLOOD) { floodView = true; refresh(); } });
+cv.addEventListener('click', e => doAct(e, 'raise'));
+addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M') snd.toggle(); });
+cv.addEventListener('contextmenu', e => doAct(e, 'dig'));
+document.getElementById('undo').onclick = () => { const h = hist.pop(); if (!h) return; g = h.g; handsLeft = h.handsLeft; budgetLeft = h.budgetLeft; log.pop(); refresh(); };
+document.getElementById('rain').onclick = () => {
+  if (B.over(g) || anim) return;
+  snd.init();
+  bxOld.clearRect(0, 0, bgOld.width, bgOld.height); bxOld.drawImage(bg, 0, 0);
+  const pre = B.clone(g), rainNow = g.rains[g.season];
+  const storm = calc(pre, rainNow);
+  const n = g.season + 1, rn = RNAME[g.rains[g.season]];
+  const res = B.season(g);
+  const n0 = res.length;
+  const bad = res.map((r, k) => r.state === 'flood' ? `村${k+1}淹了` : r.state === 'dry' ? `村${k+1}渴散了` : null).filter(Boolean);
+  for (let k = n0; k < g.vil.length; k++) bad.push(`村${g.vil[k].from + 1}分出了村${k + 1}`);
+  log.push(`第 ${n} 季 ${rn}：${bad.length ? bad.join('，') : '都还在'}`);
+  hist = []; handsLeft = g.p.HANDS;
+  refresh();
+  anim = { t0: performance.now(), dur: 2600 + (rainNow >= 3 ? 1400 : 0), pre, storm, res, n0, rain: rainNow, played: false };
+  snd.storm(rainNow, anim.dur);
+};
+document.getElementById('new').onclick = () => { seed = Math.floor(Math.random() * 100000); start(); };
+start();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
