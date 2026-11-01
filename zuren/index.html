@@ -8,7 +8,7 @@ h1{font-size:22px;margin:4px 0}.small{color:#7a6f5f;font-size:13px}
 .水{color:#8a2b1a;font-weight:bold}
 .卡们{display:flex;flex-wrap:wrap;gap:10px}
 .卡{background:#fffaf0;border:1px solid #c9b997;border-radius:8px;padding:8px 10px;width:250px;box-shadow:0 1px 2px #0002}
-.卡 b{font-size:17px}.卡 .一行{color:#5b5144;font-size:14px}.卡 .线{color:#7b3e1d;font-size:13px}
+.卡 b{font-size:17px}.卡 .一行{color:#5b5144;font-size:14px}.卡 .线{color:#7b3e1d;font-size:13px}.卡 .想{color:#2f5a6b;font-size:13px}
 .处{display:flex;gap:4px;margin-top:6px}.处 button{flex:1;border:1px solid #b8a67f;background:#f6efe0;border-radius:4px;padding:3px 0;cursor:pointer;font-family:inherit}
 .处 button.选{background:#6b5a3a;color:#fff}
 #过{margin:14px 0;padding:8px 22px;font-size:16px;background:#3d5a4a;color:#fff;border:0;border-radius:6px;cursor:pointer;font-family:inherit}
@@ -38,7 +38,7 @@ function 画() {
   for (const p of 能干的(g)) {
     if (!派[p.id]) 派[p.id] = '坡';
     const c = 卡(g, p), d = document.createElement('div'); d.className = '卡';
-    d.innerHTML = `<b>${c.名}</b> ${c.岁}岁 · ${c.本事}<div class="一行">${c.一行}</div>${c.线.length ? `<div class="线">${c.线.join('；')}</div>` : ''}`;
+    d.innerHTML = `<b>${c.名}</b> ${c.岁}岁 · ${c.本事}<div class="一行">${c.一行}</div>${c.线.length ? `<div class="线">${c.线.join('；')}</div>` : ''}${c.想 ? `<div class="想">${c.想}</div>` : ''}`;
     const 行 = document.createElement('div'); 行.className = '处';
     for (const k of ['田', '坡', '堤', '渠']) { const b = document.createElement('button'); b.textContent = 处名[k]; if (派[p.id] === k) b.className = '选'; b.onclick = () => { 派[p.id] = k; 画(); }; 行.appendChild(b); }
     d.appendChild(行); box.appendChild(d);
