@@ -28,11 +28,12 @@ const 处名 = { 田: '南田', 坡: '北坡', 堤: '守田堤', 渠: '北渠' }
 let g = 新局(Math.floor(Math.random() * 100000) + 1), 派 = {};
 function 画() {
   const n = 离大水(g);
-  const 渠 = g.渠通 ? (g.淤死 ? '淤死了' : (g.淤 || 0) >= 2 ? '淤了一半' : '通了') : `挖了 ${Math.round(g.渠 * 10) / 10} / 10`;
-  const 水 = n === null ? '后面没有大水了' : n === 0 ? '<span class="水">这一回有大水</span>' : n === 1 ? '<span class="水">下一回有大水</span>' : `再过 ${n} 回（${n * 10} 年）有大水`;
+  const 渠 = g.渠通 ? (g.淤死 ? '淤死了' : (g.淤 || 0) >= 2 ? '淤了一半' : '通了') : (g.渠 >= 7 ? '快通了' : g.渠 >= 3 ? '挖了一半' : g.渠 > 0 ? '刚起头' : '没动');
+  const 看 = 看水(g);
+  const 水 = n === null ? '后面没有大水了' : n <= 1 ? `<span class="水">${看.水}</span>` : 看.水;
   const 老小 = g.人们.filter(p => p.活 && !(p.岁 >= 15 && p.岁 < 60)).map(p => `${p.名}(${p.岁})`).join('、') || '没有';
   document.getElementById('头').innerHTML = g.完 ? `<b>${g.终}</b>` :
-    `第 ${g.代} 回（第 ${g.代 * 10 - 10} 年）　粮 ${Math.round(g.粮 * 10) / 10}　堤 ${Math.round(g.堤 * 10) / 10}　北渠 ${渠}　${水}<br><span class="small">屋里的老小：${老小}</span>`;
+    `第 ${g.代} 回（第 ${g.代 * 10 - 10} 年）　粮：${看.粮}　堤：${看.堤}　北渠 ${渠}　${水}<br><span class="small">屋里的老小：${老小}</span>`;
   const box = document.getElementById('卡们'); box.innerHTML = '';
   if (g.完) { document.getElementById('过').style.display = 'none'; return; }
   for (const p of 能干的(g)) {
