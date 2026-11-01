@@ -128,7 +128,7 @@ function 过一代(g, 派) {
   if (!大水 && 人手.length) { const p = 挑(R, 人手.filter(p => p.活)); if (p) 书.push({ 文: 句(g, R, p, g.粮 > 4 ? '丰' : '旱', 地名[p.在]), 重: 3 }); }
   // 老、生
   for (const p of g.人们) if (p.活) p.岁 += 10;
-  for (const p of g.人们) if (p.活 && p.岁 >= 60 && p.想要) { 书.push({ 文: `${p.名}老了，${p.想要.话.replace(/^想/, '').replace(/，.*/, '')}，到底没成。`, 重: 6 }); p.没成 = p.想要.话; p.想要 = null; }
+  for (const p of g.人们) if (p.活 && p.岁 >= 60 && p.想要) { if (p.想要.处 === '堤' || p.想要.话.includes('没守住')) 书.push({ 文: `${p.名}老了，${p.想要.话.replace(/^想/, '').replace(/，.*/, '')}，到底没成。`, 重: 6 }); p.没成 = p.想要.话; p.想要 = null; }
   for (const p of g.人们) if (p.活 && p.岁 >= 60 && !p.老过) { p.老过 = true; if (p.线.some(l => 事类.has(l.类))) 书.push({ 文: 句(g, R, p, '老', ''), 重: 4 }); }
   for (const p of g.人们) if (p.活 && p.岁 >= 68 + (p.寿 || 0) && R() < (p.岁 - 62 - (p.寿 || 0)) / 15) { p.活 = false; p.死于 = g.代; p.老死 = true;
     const 独 = p.本事.filter(b => !g.人们.some(q => q.活 && q.本事.includes(b)));
