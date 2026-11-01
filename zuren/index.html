@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>百川·族人卡（小样）</title>
+<style>
+body{font-family:"PingFang SC","Songti SC",serif;background:#f3ede0;color:#2b2620;max-width:860px;margin:0 auto;padding:18px;line-height:1.7}
+h1{font-size:22px;margin:4px 0}.small{color:#7a6f5f;font-size:13px}
+#头{background:#e7dcc6;padding:8px 12px;border-radius:6px;margin:10px 0}
+.水{color:#8a2b1a;font-weight:bold}
+.卡们{display:flex;flex-wrap:wrap;gap:10px}
+.卡{background:#fffaf0;border:1px solid #c9b997;border-radius:8px;padding:8px 10px;width:250px;box-shadow:0 1px 2px #0002}
+.卡 b{font-size:17px}.卡 .一行{color:#5b5144;font-size:14px}.卡 .线{color:#7b3e1d;font-size:13px}
+.处{display:flex;gap:4px;margin-top:6px}.处 button{flex:1;border:1px solid #b8a67f;background:#f6efe0;border-radius:4px;padding:3px 0;cursor:pointer;font-family:inherit}
+.处 button.选{background:#6b5a3a;color:#fff}
+#过{margin:14px 0;padding:8px 22px;font-size:16px;background:#3d5a4a;color:#fff;border:0;border-radius:6px;cursor:pointer;font-family:inherit}
+#结果{background:#fffaf0;border-left:4px solid #8a6d3b;padding:6px 12px;margin:10px 0;white-space:pre-wrap}
+#谱 div{margin:4px 0}.代{color:#8a6d3b}
+</style></head><body>
+<h1>百川 · 族人卡（小样）</h1>
+<div class="small">一族人在河谷里过一百五十年，一回十年。把能干活的人放到田、坡、堤、渠上，点"过十年"。堤后头是村子，老的小的在屋里，上不了北坡。</div>
+<div id="头"></div>
+<div class="卡们" id="卡们"></div>
+<button id="过">过十年</button>
+<div id="结果" style="display:none"></div>
+<h3>族谱</h3><div id="谱"></div>
+<script src="族.js"></script>
+<script>
+const 处名 = { 田: '南田', 坡: '北坡', 堤: '守田堤', 渠: '北渠' };
+let g = 新局(Math.floor(Math.random() * 100000) + 1), 派 = {};
+function 画() {
+  const n = 离大水(g);
+  const 渠 = g.渠通 ? (g.淤死 ? '淤死了' : (g.淤 || 0) >= 2 ? '淤了一半' : '通了') : `挖了 ${Math.round(g.渠 * 10) / 10} / 10`;
+  const 水 = n === null ? '后面没有大水了' : n === 0 ? '<span class="水">这一回有大水</span>' : n === 1 ? '<span class="水">下一回有大水</span>' : `再过 ${n} 回（${n * 10} 年）有大水`;
+  const 老小 = g.人们.filter(p => p.活 && !(p.岁 >= 15 && p.岁 < 60)).map(p => `${p.名}(${p.岁})`).join('、') || '没有';
+  document.getElementById('头').innerHTML = g.完 ? `<b>${g.终}</b>` :
+    `第 ${g.代} 回（第 ${g.代 * 10 - 10} 年）　粮 ${Math.round(g.粮 * 10) / 10}　堤 ${Math.round(g.堤 * 10) / 10}　北渠 ${渠}　${水}<br><span class="small">屋里的老小：${老小}</span>`;
+  const box = document.getElementById('卡们'); box.innerHTML = '';
+  if (g.完) { document.getElementById('过').style.display = 'none'; return; }
+  for (const p of 能干的(g)) {
+    if (!派[p.id]) 派[p.id] = '坡';
+    const c = 卡(g, p), d = document.createElement('div'); d.className = '卡';
+    d.innerHTML = `<b>${c.名}</b> ${c.岁}岁 · ${c.本事}<div class="一行">${c.一行}</div>${c.线.length ? `<div class="线">${c.线.join('；')}</div>` : ''}`;
+    const 行 = document.createElement('div'); 行.className = '处';
+    for (const k of ['田', '坡', '堤', '渠']) { const b = document.createElement('button'); b.textContent = 处名[k]; if (派[p.id] === k) b.className = '选'; b.onclick = () => { 派[p.id] = k; 画(); }; 行.appendChild(b); }
+    d.appendChild(行); box.appendChild(d);
+  }
+}
+document.getElementById('过').onclick = () => {
+  const r = 过一代(g, 派); 派 = {};
+  const 结 = document.getElementById('结果'); 结.style.display = '';
+  结.textContent = r.翻.join('\n') + (r.死.length ? '\n没回来的：' + r.死.join('、') : '');
+  const 谱 = document.getElementById('谱'), d = g.族谱[g.族谱.length - 1];
+  const e = document.createElement('div'); e.innerHTML = `<span class="代">【第${d.代}回${d.大水 ? '·大水' : ''}】</span> ${d.句.join(' ')}`; 谱.appendChild(e);
+  画();
+};
+画();
+</script></body></html>
