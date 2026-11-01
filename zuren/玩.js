@@ -1,7 +1,7 @@
 // 命令行里玩：node 玩.js 新 [种子]   开一局
 //             node 玩.js 看          看这一代的人
 //             node 玩.js 规矩        看这一代的人，连规矩一起
-//             node 玩.js 放 阿满=堤 福=渠 ...   放人过一代（没写的放北坡）
+//             node 玩.js 放 阿满=堤 福=渠 ...   放人过一代（每个人都要写上）
 // 局存在 局.json
 const fs = require('fs'), path = require('path');
 const Z = require('./族.js');
@@ -9,7 +9,7 @@ const F = path.join(__dirname, '局.json');
 const 存 = g => fs.writeFileSync(F, JSON.stringify(g));
 const 读 = () => JSON.parse(fs.readFileSync(F, 'utf8'));
 function 看(g, 规) {
-  if (g.完) { console.log('\n=== ' + g.终 + ' 整本族谱：'); for (const d of g.族谱) { console.log(`【第${d.代}回${d.大水 ? '·大水' : ''}】`); d.句.forEach(s => console.log('  ' + s)); } return; }
+  if (g.完) { console.log('\n=== ' + g.终 + '\n\n整本族谱：'); for (const d of g.族谱) { console.log(`【第${d.代}回${d.大水 ? '·大水' : ''}】`); d.句.forEach(s => console.log('  ' + s)); } return; }
   const n = Z.离大水(g);
   const 看 = Z.看水(g);
   console.log(`\n—— 第${g.代}回（第${g.代*10-10}年）——  粮：${看.粮}　堤：${看.堤}　北渠 ${g.渠通 ? (g.淤死 ? '淤死了' : g.淤 >= 2 ? '淤了一半' : '通了') : (g.渠 > 0 ? `挖到${Math.round(g.渠 * 10)}丈（要一百丈）` : '没动')}　${看.水 || '后面没有大水了'}`);
@@ -27,6 +27,8 @@ else if (cmd === '放') {
   const g = 读(); if (g.完) { 看(g); process.exit(); }
   const 派 = {};
   for (const s of a) { const [名, 处] = s.split('='); const p = Z.能干的(g).find(x => x.名 === 名); if (!p) { console.log('没有这个能干活的人：' + 名); process.exit(1); } 派[p.id] = 处; }
+  const 没放 = Z.能干的(g).filter(p => !派[p.id]).map(p => p.名);
+  if (没放.length) { console.log('还有人没放：' + 没放.join('、') + '。每个人都要放到一处，这十年才过得去。'); process.exit(1); }
   const r = Z.过一代(g, 派);
   console.log('\n· 这十年：'); r.翻.forEach(s => console.log('  ' + s));
   if (r.死.length) console.log('  没回来的：' + r.死.join('、'));
